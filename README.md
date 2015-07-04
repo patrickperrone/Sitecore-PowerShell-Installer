@@ -1,6 +1,6 @@
 Sitecore-PowerShell-Installer
 =============================
-The Sitecore-PowerShell-Installer script enables you to install Production-ready Sitecore instances from the command-line.
+The Sitecore-PowerShell-Installer script enables you to install Production-ready Sitecore instances from the command-line. This script was built for and tested against Sitecore 8.0. If there is enough interest shown, I will consider retro-fitting it to earlier versions of Sitecore.
 
 ### Features of the Project
 - Install Sitecore with or without the databases.
