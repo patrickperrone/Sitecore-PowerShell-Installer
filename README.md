@@ -12,7 +12,7 @@ The Sitecore-PowerShell-Installer script enables you to install Production-ready
 - Create user mappings for login in SQL.
 - Install database files on any valid path or UNC
 - SQL Login used during install doesn't have to be the same account executing the script.
-- May specifiy a host name and port used for MongoDB
+- May specify a host name and port used for MongoDB
 - May supply a Solr base address
 - Choose to use SQL as a session state server
 - Many CD-hardening options
