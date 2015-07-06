@@ -9,7 +9,7 @@ The Sitecore-PowerShell-Installer script enables you to install Production-ready
 - Fine-grained control of the application pool identity (built-in or domain account)
 - Assign recommended file system permissions on web server.
 - Add application pool identity to recommended local groups on web server.
-- Create user mappings for login in SQL.
+- Create user mappings for login in SQL and grant execute permission.
 - Install database files on any valid path or UNC
 - SQL Login used during install doesn't have to be the same account executing the script.
 - May specify a host name and port used for MongoDB
