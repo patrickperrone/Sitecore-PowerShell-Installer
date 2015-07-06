@@ -56,6 +56,10 @@ function Get-SqlLoginAccountForDataAccess([xml]$config)
     {
         return $config.InstallSettings.Database.SqlLoginForInstall
     }
+    else
+    {
+        Write-Host "The SqlLoginForInstall is a domain account and SqlLoginForDataAccess is undefined. You must supply a value for SqlLoginForDataAccess." -ForegroundColor Yellow
+    }
 
     return $null
 }
