@@ -634,7 +634,7 @@ function Initialize-WebSite([xml]$config)
         $hostName = $config.InstallSettings.WebServer.IISHostName
         $installPath = Join-Path $config.InstallSettings.WebServer.SitecoreInstallRoot -ChildPath $config.InstallSettings.WebServer.SitecoreInstallFolder
         $sitePath = Join-Path $installPath -ChildPath "Website"
-        New-Website –Name $iisSiteName –Port 80 –HostHeader $hostname –PhysicalPath $sitePath -ApplicationPool $appPoolName -force | Out-Null
+        New-Website -Name $iisSiteName -Port 80 –HostHeader $hostname -PhysicalPath $sitePath -ApplicationPool $appPoolName -force | Out-Null
 
         # Add hostname to hosts file
         Write-Message $config "Add $hostName to hosts file" "White"
