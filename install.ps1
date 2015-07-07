@@ -189,11 +189,27 @@ function Confirm-ConfigurationSettings([xml]$config)
         Write-Host "SitecoreZipPath cannot be null or empty" -ForegroundColor Red
         return $FALSE
     }
+    else
+    {
+        if (!(Test-Path $config.InstallSettings.SitecoreZipPath))
+        {
+            Write-Host "Couldn't find a file specified by SitecoreZipPath" -ForegroundColor Red
+            return $FALSE
+        }
+    }
 
     if ([string]::IsNullOrEmpty($config.InstallSettings.WebServer.LicenseFilePath))
     {
         Write-Host "LicenseFilePath cannot be null or empty" -ForegroundColor Red
         return $FALSE
+    }
+    else
+    {
+        if (!(Test-Path $config.InstallSettings.WebServer.LicenseFilePath))
+        {
+            Write-Host "Couldn't find a file specified by LicenseFilePath" -ForegroundColor Red
+            return $FALSE
+        }
     }
 
     if ([string]::IsNullOrEmpty($config.InstallSettings.WebServer.SitecoreInstallRoot))
