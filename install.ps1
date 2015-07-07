@@ -153,6 +153,35 @@ function Confirm-SqlConnectionAndRoles([xml]$config)
     }
 }
 
+function Confirm-SqlInstallPath([xml]$config)
+{
+    # Check that path exists
+    $dbInstallPath = $config.InstallSettings.Database.DatabaseInstallPath
+    if (Test-Path $dbInstallPath)
+    {
+        # Check that SQL has correct rights over install path, else Database Attach will fail
+        [Microsoft.SqlServer.Management.Smo.Server]$sqlServerSmo = Get-SqlServerSmo $config        
+        $user = $sqlServerSmo.SqlDomainGroup
+        $acl = Get-Acl $dbInstallPath
+        $isCorrectRights = $acl.Access | Where {($_.IdentityReference -eq $user) -and ($_.FileSystemRights -eq "FullControl")}
+        if($isCorrectRights)
+        {
+            return $TRUE
+        }  
+        else
+        {
+            Write-Host "SQL doesn't appear to have enough rights for the install path: $dbInstallPath" -ForegroundColor Red
+            Write-Host "Try granting $sqlServerSmo.SqlDomainGroup FullControl" -ForegroundColor Red
+        }
+    }
+    else
+    {
+        Write-Host "Path does not exist: $dbInstallPath" -ForegroundColor Red
+    }
+
+    return $FALSE
+}
+
 function Confirm-ConfigurationSettings([xml]$config)
 {
     if ([string]::IsNullOrEmpty($config.InstallSettings.SitecoreZipPath))
@@ -288,6 +317,12 @@ function Confirm-ConfigurationSettings([xml]$config)
             return $FALSE
         }
     }
+
+    if ([string]::IsNullOrEmpty($config.InstallSettings.Database.DatabaseInstallPath))
+    {
+        Write-Host "DatabaseInstallPath cannot be null or empty" -ForegroundColor Red
+        return $FALSE
+    }
     
     $isValidLoginConfiguration = Confirm-SqlLoginConfiguration $config
     if (!$isValidLoginConfiguration)
@@ -300,6 +335,13 @@ function Confirm-ConfigurationSettings([xml]$config)
     if(!$isSqlConnectionValid)
     {
         Write-Host "A problem has been detected with the SQL connection." -ForegroundColor Red
+        return $FALSE
+    }
+
+    $isValidSqlInstallPath = Confirm-SqlInstallPath $config
+    if (!$isValidSqlInstallPath)
+    {
+        Write-Host "DatabaseInstallPath is not valid." -ForegroundColor Red
         return $FALSE
     }
 
@@ -323,29 +365,8 @@ function Find-FolderInZipFile($items, [string]$folderName)
 
 function Get-DatabaseInstallFolderPath([xml]$config, [string]$installPath)
 {
-    # Determine the install root for db files
-    if ([string]::IsNullOrEmpty($config.InstallSettings.Database.DatabaseInstallRoot))
-    {
-        $dbInstallPath = $installPath
-    }
-    else
-    {
-        $dbInstallPath = $config.InstallSettings.Database.DatabaseInstallRoot
-    }
 
-    # Determine database folder name
-    $defaultDbFolderName = "Databases"
-    if ([string]::IsNullOrEmpty($config.InstallSettings.Database.DatabaseInstallFolderName))
-    {
-        $dbFolderName = $defaultDbFolderName
-    }
-    else
-    {
-        $dbFolderName = $config.InstallSettings.Database.DatabaseInstallFolderName
-    }
-
-    $dbFolderPath = Join-path $dbInstallPath -ChildPath $dbFolderName
-    return $dbFolderPath
+    return $config.InstallSettings.Database.DatabaseInstallPath
 }
 
 function Copy-DatabaseFiles([xml]$config, [string]$zipPath, [string]$installPath)
@@ -354,18 +375,35 @@ function Copy-DatabaseFiles([xml]$config, [string]$zipPath, [string]$installPath
 
     Write-Message $config "Extracting database files from $zipPath to $dbFolderPath" "White"
 
-    # Copy Databases folder
-    if (Test-Path $dbFolderPath)
-    {
-        Write-Message $config "$dbFolderPath already exists, skipping extraction" "Yellow"
-    }
-    else
+    if (!(Test-Path $dbFolderPath))
     {
         # Create Database directory
         New-Item $dbFolderPath -type directory -force | Out-Null
+    }
 
-        $item = Find-FolderInZipFile $shell.NameSpace($zipPath).Items() "Databases"
-        foreach($childItem in $shell.NameSpace($item.Path).Items())
+    $item = Find-FolderInZipFile $shell.NameSpace($zipPath).Items() "Databases"
+    foreach($childItem in $shell.NameSpace($item.Path).Items())
+    {
+        if ($childItem.Name -eq "Sitecore.Analytics.ldf")
+        {
+            $fileName = "Sitecore.Reporting.ldf"
+        }
+        elseif ($childItem.Name -eq "Sitecore.Analytics.mdf")
+        {
+            $fileName = "Sitecore.Reporting.mdf"
+        }
+        else
+        {
+            $fileName = $childItem.Name
+        }
+        
+        $filePath = Join-Path $dbFolderPath -ChildPath $fileName
+
+        if (Test-Path $filePath)
+        {
+            Write-Message $config "$filePath already exists, skipping extraction" "Yellow"
+        }
+        else
         {
             $shell.NameSpace($dbFolderPath).CopyHere($childItem)
 
@@ -379,10 +417,10 @@ function Copy-DatabaseFiles([xml]$config, [string]$zipPath, [string]$installPath
             {
                 Rename-Item "$dbFolderPath\Sitecore.Analytics.mdf" "Sitecore.Reporting.mdf"
             }
-
         }
-        Write-Message $config "Database files copied." "White"
     }
+
+    Write-Message $config "Database files copied." "White"   
 }
 
 function Copy-SitecoreFiles([xml]$config)
