@@ -20,6 +20,7 @@ The Sitecore-PowerShell-Installer script enables you to install Production-ready
 ### Requirements
 - SQL logins must exist prior to running script
 - SQL login used for install must either have the sysadmin or both the dbcreator and securityadmin roles
+- The path used to install SQL files must exist and targetted SQL instance must have FullControl
 - Must have a valid Sitecore .zip file
 
 ### How To Use
