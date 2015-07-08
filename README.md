@@ -30,6 +30,6 @@ The Sitecore-PowerShell-Installer script enables you to install Production-ready
 
 ### Troubleshooting
 - If you see an error in PowerShell complaining that "the execution of scripts is disabled on this system." then you need to invoke ```Set-ExecutionPolicy -ExecutionPolicy unrestricted -Force```
-- If you receive security warning after invoking ```.\install.ps1``` and want to make it go away permanently, then right-click on the install.ps1 file and "Unblock" it.
+- If you receive a security warning after invoking ```.\install.ps1``` and want to make it go away permanently, then right-click on the install.ps1 file and "Unblock" it.
 
 This script was inspired by Alex Shyba's script: https://github.com/Sitecore/PowerShell-Script-Library
