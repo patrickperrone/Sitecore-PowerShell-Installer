@@ -640,7 +640,9 @@ function Set-ApplicationPoolIdentity([xml]$config, $pool)
 
     $pool | Set-Item
 
-    Write-Message $config "Identity of application pool is $pool.processModel.userName" "White"
+    $identityName = $pool.processModel.userName
+
+    Write-Message $config "Identity of application pool is $identityName" "White"
 }
 
 function Add-IpRestrictionsToTarget([xml]$config, [string]$target, [string]$iisSiteName)
@@ -959,14 +961,20 @@ function Set-FileSystemPermissions([xml]$config, [string]$iisSiteName)
     $appPoolName = $site.applicationPool
     $pool = Get-Item IIS:\AppPools\$appPoolName
 
+    $identityName = $pool.processModel.userName
+    if ($identityName.Equals("ApplicationPoolIdentity"))
+    {
+        $identityName = "IIS APPPOOL\$appPoolName"
+    }
+
     # Set ACLs for "Website"
     $folderPath = Join-Path $installPath -ChildPath "Website"
-    Set-AclForFolder $pool.processModel.userName "Modify" $folderPath
+    Set-AclForFolder $identityName "Modify" $folderPath
     Set-AclForFolder "IUSR" "Read" $folderPath
 
     # Set ACLs for "Data"
     $folderPath = Join-Path $installPath -ChildPath "Data"
-    Set-AclForFolder $pool.processModel.userName "Modify" $folderPath
+    Set-AclForFolder $identityName "Modify" $folderPath
 }
 
 function Get-FilesToDisableOnCDServer([xml]$config)
