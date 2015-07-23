@@ -125,12 +125,13 @@ function Confirm-SqlConnectionAndRoles([xml]$config)
         # Validate SQL connection can be established
         $sqlServerSmo.ConnectionContext.Connect()
 
-        # Validate server roles for install login: must be sysadmin or dbcreator and securityadmin
+        # Validate server roles for install login: must be sysadmin
         $memberName = $config.InstallSettings.Database.SqlLoginForInstall
         $isSysAdmin = Confirm-MemberOfRole $memberName "sysadmin" $sqlServerSmo
         if (!$isSysAdmin)
         {
             Write-Host "$memberName doesn't have required server roles in SQL" -ForegroundColor Red
+            Write-Host "Grant the sysadmin role to $memberName" -ForegroundColor Red
             return $FALSE
         }
 
@@ -151,10 +152,26 @@ function Confirm-SqlConnectionAndRoles([xml]$config)
     }
 }
 
+function Get-DatabaseInstallFolderPath([xml]$config, [bool]$localPath=$TRUE)
+{
+    if ($localPath)
+    {
+        return $config.InstallSettings.Database.DatabaseInstallPath.Local
+    }
+
+    # Return the Local path if the Unc path does not exist
+    if ([string]::IsNullOrEmpty($config.InstallSettings.Database.DatabaseInstallPath.Unc))
+    {
+        return $config.InstallSettings.Database.DatabaseInstallPath.Local
+    }
+
+    return $config.InstallSettings.Database.DatabaseInstallPath.Unc
+}
+
 function Confirm-SqlInstallPath([xml]$config)
 {
     # Check that path exists
-    $dbInstallPath = $config.InstallSettings.Database.DatabaseInstallPath
+    $dbInstallPath = Get-DatabaseInstallFolderPath $config $FALSE
     if (Test-Path $dbInstallPath)
     {
         # Check that SQL has correct rights over install path, else Database Attach will fail
@@ -349,9 +366,9 @@ function Confirm-ConfigurationSettings([xml]$config)
         }
     }
 
-    if ([string]::IsNullOrEmpty($config.InstallSettings.Database.DatabaseInstallPath))
+    if ([string]::IsNullOrEmpty($config.InstallSettings.Database.DatabaseInstallPath.Local))
     {
-        Write-Host "DatabaseInstallPath cannot be null or empty" -ForegroundColor Red
+        Write-Host "DatabaseInstallPath.Local cannot be null or empty" -ForegroundColor Red
         return $FALSE
     }
     
@@ -394,15 +411,9 @@ function Find-FolderInZipFile($items, [string]$folderName)
     } 
 }
 
-function Get-DatabaseInstallFolderPath([xml]$config, [string]$installPath)
+function Copy-DatabaseFiles([xml]$config, [string]$zipPath)
 {
-
-    return $config.InstallSettings.Database.DatabaseInstallPath
-}
-
-function Copy-DatabaseFiles([xml]$config, [string]$zipPath, [string]$installPath)
-{
-    $dbFolderPath =  Get-DatabaseInstallFolderPath $config $installPath
+    $dbFolderPath =  Get-DatabaseInstallFolderPath $config $FALSE
 
     Write-Message $config "Extracting database files from $zipPath to $dbFolderPath" "White"
 
@@ -495,7 +506,7 @@ function Copy-SitecoreFiles([xml]$config)
 
     if (Get-ConfigOption $config "Database/InstallDatabase")
     {
-        Copy-DatabaseFiles $config $zipPath $installPath
+        Copy-DatabaseFiles $config $zipPath
     }
     else
     {
@@ -529,10 +540,8 @@ function Attach-SitecoreDatabase([xml]$config, [string]$databaseName, [Microsoft
         $message = "Attaching database $fullDatabaseName to " + $sqlServerSmo.Name
         Write-Message $config $message "White"
 
-        $installPath = Join-path $config.InstallSettings.WebServer.SitecoreInstallRoot -ChildPath $config.InstallSettings.WebServer.SitecoreInstallFolder
-        $dbFolderPath = Get-DatabaseInstallFolderPath $config $installPath
-
         # Get paths of the data and log file
+        $dbFolderPath = Get-DatabaseInstallFolderPath $config $TRUE
         $dataFilePath = Join-path $dbFolderPath -ChildPath "Sitecore.$databaseName.mdf";
         $logFilePath = Join-Path $dbFolderPath -ChildPath "Sitecore.$databaseName.ldf";
 
