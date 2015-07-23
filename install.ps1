@@ -128,9 +128,7 @@ function Confirm-SqlConnectionAndRoles([xml]$config)
         # Validate server roles for install login: must be sysadmin or dbcreator and securityadmin
         $memberName = $config.InstallSettings.Database.SqlLoginForInstall
         $isSysAdmin = Confirm-MemberOfRole $memberName "sysadmin" $sqlServerSmo
-        $isDbCreator = Confirm-MemberOfRole $memberName "dbcreator" $sqlServerSmo
-        $isSecurityAdmin = Confirm-MemberOfRole $memberName "securityadmin" $sqlServerSmo
-        if (!$isSysAdmin -and !($isDbCreator -and $isSecurityAdmin))
+        if (!$isSysAdmin)
         {
             Write-Host "$memberName doesn't have required server roles in SQL" -ForegroundColor Red
             return $FALSE
