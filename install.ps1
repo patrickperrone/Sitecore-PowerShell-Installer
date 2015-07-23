@@ -170,8 +170,25 @@ function Confirm-SqlInstallPath([xml]$config)
         }  
         else
         {
-            Write-Host "SQL doesn't appear to have enough rights for the install path: $dbInstallPath" -ForegroundColor Red
-            Write-Host "Try granting $sqlServerSmo.SqlDomainGroup FullControl" -ForegroundColor Red
+            Write-Host "SQL doesn't appear to have enough rights for the install path." -ForegroundColor Yellow
+            Write-Host "This might be because SQL is using builtin virtual service accounts, and those exist local accounts on a different server than the Sitecore server. If this is true, you may IGNORE this message." -ForegroundColor Yellow
+            Write-Host "Ensure that the SQL service for your SQL instance has FullControl of $dbInstallPath" -ForegroundColor Yellow
+            Write-Host "Failure to do so will PREVENT the databases from attaching.`n" -ForegroundColor Yellow
+
+            if (Get-ConfigOption $config "SuppressPrompts")
+            {
+                return $TRUE
+            }
+            else
+            {
+                $shell = new-object -comobject "WScript.Shell"
+                $result = $shell.popup("Do you wish to proceed?",0,"Question",4+32)
+                # $result will be 6 for yes, 7 for no.
+                if ($result -eq 6)
+                {
+                    return $TRUE
+                }
+            }
         }
     }
     else
