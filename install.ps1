@@ -39,7 +39,7 @@ function Get-ConfigOption([xml]$config, [string]$optionName)
 function Get-SqlLoginAccountForDataAccess([xml]$config)
 {
     # Top priority is Application Pool Identity
-    if (Get-ConfigOption $config "WebServer/UseWindowsAuthenticationForSqlDataAccess")
+    if (Get-ConfigOption $config "Database/UseWindowsAuthenticationForSqlDataAccess")
     {
         return $config.InstallSettings.WebServer.AppPoolIdentity
     }
@@ -305,7 +305,7 @@ function Confirm-ConfigurationSettings([xml]$config)
     else
     {
         # Using a built-in account, ensure it will not be used for SQL login
-        if (Get-ConfigOption $config "WebServer/UseWindowsAuthenticationForSqlDataAccess")
+        if (Get-ConfigOption $config "Database/UseWindowsAuthenticationForSqlDataAccess")
         {
             Write-Host "Must use a domain account for application pool identity when also using Windows authentication for SQL login" -ForegroundColor Red
             return $FALSE
@@ -735,7 +735,7 @@ function Get-BaseConnectionString([xml]$config)
 {
     $sqlServerName = $config.InstallSettings.Database.SqlServerName
     
-    if (Get-ConfigOption $config "WebServer/UseWindowsAuthenticationForSqlDataAccess")
+    if (Get-ConfigOption $config "Database/UseWindowsAuthenticationForSqlDataAccess")
     {
         $baseConnectionString = "Server=$sqlServerName;Trusted_Connection=Yes;Database="
     }
