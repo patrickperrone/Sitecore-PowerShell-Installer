@@ -27,13 +27,13 @@ function Read-InstallConfigFile
 
 function Get-ConfigOption([xml]$config, [string]$optionName)
 {
-    $shouldInstall = $FALSE
+    $optionValue = $FALSE
     $nodeValue = $config.InstallSettings.SelectSingleNode($optionName).InnerText
     if (!([string]::IsNullOrEmpty($nodeValue)))
     {
-        $shouldInstall = [System.Convert]::ToBoolean($nodeValue)
+        $optionValue = [System.Convert]::ToBoolean($nodeValue)
     }
-    return $shouldInstall
+    return $optionValue
 }
 
 function Get-SqlLoginAccountForDataAccess([xml]$config)
