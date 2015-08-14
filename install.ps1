@@ -1193,8 +1193,9 @@ function Install-SitecoreApplication
         New-Item $installPath -type directory -force | Out-Null
     }
 
+    $stopWatch = [Diagnostics.Stopwatch]::StartNew()
     $date = Get-Date
-    $message = "Starting install - $date" 
+    $message = "Starting Sitecore install - $date" 
     Write-Message $config $message "Green"
 
     $loginName = $config.InstallSettings.Database.SqlLoginForInstall
@@ -1212,8 +1213,8 @@ function Install-SitecoreApplication
 
     Initialize-SitecoreDatabases $config
 
-    $date = Get-Date
-    $message = "`nInstall finished - $date"
+    $stopWatch.Stop()
+    $message = "`nSitecore install finished - Elapsed time {0}:{1} minute(s)" -f $stopWatch.Elapsed.Minutes, $stopWatch.Elapsed.Seconds
     Write-Message $config $message "Green"
 
     $siteUrl = "http://" + $config.InstallSettings.WebServer.IISHostName
