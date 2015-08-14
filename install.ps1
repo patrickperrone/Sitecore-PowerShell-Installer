@@ -587,8 +587,13 @@ function Attach-SitecoreDatabase([xml]$config, [string]$databaseName, [Microsoft
 
         # Get paths of the data and log file
         $dbFolderPath = Get-DatabaseInstallFolderPath $config $TRUE
-        $dataFilePath = Join-path $dbFolderPath -ChildPath "Sitecore.$databaseName.mdf";
-        $logFilePath = Join-Path $dbFolderPath -ChildPath "Sitecore.$databaseName.ldf";
+        if (!($dbFolderPath.EndsWith("\")))
+        {
+            $dataFilePath = $dbFolderPath + "\"
+            $logFilePath = $dbFolderPath + "\"
+        }
+        $dataFilePath += "Sitecore.$databaseName.mdf";
+        $logFilePath += "Sitecore.$databaseName.ldf";
 
         $files = New-Object System.Collections.Specialized.StringCollection 
         $files.Add($dataFilePath) | Out-Null; 
@@ -1214,7 +1219,7 @@ function Install-SitecoreApplication
     Initialize-SitecoreDatabases $config
 
     $stopWatch.Stop()
-    $message = "`nSitecore install finished - Elapsed time {0}:{1} minute(s)" -f $stopWatch.Elapsed.Minutes, $stopWatch.Elapsed.Seconds
+    $message = "`nSitecore install finished - Elapsed time {0}:{1:D2} minute(s)" -f $stopWatch.Elapsed.Minutes, $stopWatch.Elapsed.Seconds
     Write-Message $config $message "Green"
 
     $siteUrl = "http://" + $config.InstallSettings.WebServer.IISHostName
