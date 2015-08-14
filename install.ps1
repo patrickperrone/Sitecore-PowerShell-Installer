@@ -214,6 +214,25 @@ function Confirm-SqlInstallPath([xml]$config)
     return $FALSE
 }
 
+function Confirm-WebDatabseCopyNames([xml]$config)
+{
+    $dbCopies = $config.InstallSettings.Database.WebDatabaseCopies
+
+    if ($dbCopies.copy.Count -ne ($dbCopies.copy | select -Unique).Count)
+    {
+        Write-Host "The name of a web database copy was used more than once in the config file." -ForegroundColor Red
+        return $FALSE
+    }
+
+    if ($dbCopies.copy -contains "web")
+    {
+        Write-Host "Cannot use 'web' (name is case-insensitive) as the name of a web database copy." -ForegroundColor Red
+        return $FALSE
+    }
+
+    return $TRUE
+}
+
 function Confirm-ConfigurationSettings([xml]$config)
 {
     if ([string]::IsNullOrEmpty($config.InstallSettings.SitecoreZipPath))
@@ -393,6 +412,12 @@ function Confirm-ConfigurationSettings([xml]$config)
         return $FALSE
     }
 
+    if (!(Confirm-WebDatabseCopyNames $config))
+    {
+        Write-Host "There is a duplicate name in WebDatabaseCopies. Please remove the entry." -ForegroundColor Red
+        return $FALSE
+    }
+
     return $TRUE
 }
 
@@ -411,6 +436,14 @@ function Find-FolderInZipFile($items, [string]$folderName)
     } 
 }
 
+function Get-SubstituteDatabaseFileName($currentFileName, $dbName)
+{
+    # function assumes name format will be Sitecore.{$dbname}.{ldf|mdf}
+    $prefix = $currentFileName.Substring(0,8)
+    $suffix = $currentFileName.Substring($currentFileName.Length-3)
+    return ("{0}.{1}.{2}" -f $prefix,$dbName,$suffix)
+}
+
 function Copy-DatabaseFiles([xml]$config, [string]$zipPath)
 {
     $dbFolderPath =  Get-DatabaseInstallFolderPath $config $FALSE
@@ -423,9 +456,11 @@ function Copy-DatabaseFiles([xml]$config, [string]$zipPath)
         New-Item $dbFolderPath -type directory -force | Out-Null
     }
 
+    $shell = New-Object -com shell.application
     $item = Find-FolderInZipFile $shell.NameSpace($zipPath).Items() "Databases"
     foreach($childItem in $shell.NameSpace($item.Path).Items())
     {
+        # Rename SQL Analytics database files to avoid confusion
         if ($childItem.Name -eq "Sitecore.Analytics.ldf")
         {
             $fileName = "Sitecore.Reporting.ldf"
@@ -449,15 +484,21 @@ function Copy-DatabaseFiles([xml]$config, [string]$zipPath)
         {
             $shell.NameSpace($dbFolderPath).CopyHere($childItem)
 
-            # Rename Analytics database files to Reporting
-            if ($childItem.Name -eq "Sitecore.Analytics.ldf")
+            if ($childItem.Name.ToLower() -like "sitecore.web.*")
             {
-                Rename-Item "$dbFolderPath\Sitecore.Analytics.ldf" "Sitecore.Reporting.ldf"
+                # Make copies of the web Database as required
+                $dbCopies = $config.InstallSettings.Database.WebDatabaseCopies
+                foreach ($copy in $dbCopies.copy)
+                {
+                    $copyFilePath = Join-Path $dbFolderPath -ChildPath (Get-SubstituteDatabaseFileName $childItem.Name $copy.Trim())
+                    Copy-Item $filePath $copyFilePath
+                }
             }
 
-            if ($childItem.Name -eq "Sitecore.Analytics.mdf")
+            # Rename Analytics database files to Reporting
+            if ($childItem.Name.ToLower() -like "sitecore.analytics.*")
             {
-                Rename-Item "$dbFolderPath\Sitecore.Analytics.mdf" "Sitecore.Reporting.mdf"
+                Rename-Item "$dbFolderPath\$($childItem.Name)" (Get-SubstituteDatabaseFileName $childItem.Name "Reporting")
             }
         }
     }
@@ -519,15 +560,19 @@ function Copy-SitecoreFiles([xml]$config)
     Write-Message $config "File copying done!" "White"
 }
 
-function Get-DatabaseNames
+function Get-DatabaseNames([xml]$config)
 {
-    $databaseNames = @("Core", "Master", "Web", "Sessions", "Reporting")
-    return $databaseNames
+    return $config.InstallSettings.Database.DatabaseNames.name
+}
+
+function Get-DatabaseNamePrefix([xml]$config)
+{
+    return ("{0}Sitecore_" -f $config.InstallSettings.Database.DatabaseNamePrefix.Trim())
 }
 
 function Attach-SitecoreDatabase([xml]$config, [string]$databaseName, [Microsoft.SqlServer.Management.Smo.Server]$sqlServerSmo)
 {
-    $fullDatabaseName = $config.InstallSettings.Database.DatabaseNamePrefix + $databaseName
+    $fullDatabaseName = (Get-DatabaseNamePrefix $config) + $databaseName
 
     if (!(Get-ConfigOption $config "Database/InstallDatabase"))
     {
@@ -623,7 +668,13 @@ function Initialize-SitecoreDatabases([xml]$config)
 
     [Microsoft.SqlServer.Management.Smo.Server]$sqlServerSmo = Get-SqlServerSmo $config
 
-    foreach ($dbname in Get-DatabaseNames)
+    $databaseNames = (Get-DatabaseNames $config)
+    foreach ($copy in $config.InstallSettings.Database.WebDatabaseCopies.copy)
+    {
+        $databaseNames += $copy.Trim()
+    }
+
+    foreach ($dbname in $databaseNames)
     {
         $fullDatabaseName = Attach-SitecoreDatabase $config $dbname $sqlServerSmo
         Set-DatabaseRoles $config $fullDatabaseName $sqlServerSmo
@@ -808,10 +859,10 @@ function Set-ConfigurationFiles([xml]$config)
     $connectionStringsConfig.Save($backup)
 
     $baseConnectionString = Get-BaseConnectionString $config
-    foreach ($databaseName in Get-DatabaseNames)
+    foreach ($databaseName in (Get-DatabaseNames $config))
     {
         $dbname = $databaseName.ToLower()
-        $fullDatabaseName = $config.InstallSettings.Database.DatabaseNamePrefix + $databaseName
+        $fullDatabaseName = (Get-DatabaseNamePrefix $config) + $databaseName
         $connectionString = $baseConnectionString + $fullDatabaseName + ";"
 
         $node = $connectionStringsConfig.SelectSingleNode("connectionStrings/add[@name='$dbname']")
@@ -820,6 +871,24 @@ function Set-ConfigurationFiles([xml]$config)
             $node.SetAttribute("connectionString", $connectionString);
         }
     }
+
+    # Add additional connection strings for each web database copy
+     $dbCopies = $config.InstallSettings.Database.WebDatabaseCopies
+     foreach ($copy in $dbCopies.copy)
+     {
+        $dbElement = $connectionStringsConfig.CreateElement("add")
+
+        $dbAttr = $connectionStringsConfig.CreateAttribute("name")
+        $dbAttr.Value = $copy.Trim()
+        $dbElement.Attributes.Append($dbAttr) | Out-Null
+        
+        $dbAttr = $connectionStringsConfig.CreateAttribute("connectionString")
+        $dbAttr.Value = $baseConnectionString + (Get-DatabaseNamePrefix $config) + $copy.Trim() + ";"
+        $dbElement.Attributes.Append($dbAttr) | Out-Null
+
+        $connectionStringsConfig.DocumentElement.AppendChild($dbElement) | Out-Null
+        Write-Message $config "Addedd a $($copy.Trim()) connection string" "White"
+     }
 
     # Optionally add a session connection string
     if ($config.InstallSettings.WebServer.SessionStateProvider.ToLower() -eq "mssql")
@@ -831,7 +900,7 @@ function Set-ConfigurationFiles([xml]$config)
         $sessionElement.Attributes.Append($sessionAttr) | Out-Null
 
         $sessionAttr = $connectionStringsConfig.CreateAttribute("connectionString")
-        $sessionAttr.Value = $baseConnectionString + $config.InstallSettings.Database.DatabaseNamePrefix + "Sessions;"
+        $sessionAttr.Value = $baseConnectionString + (Get-DatabaseNamePrefix $config) + "Sessions;"
         $sessionElement.Attributes.Append($sessionAttr) | Out-Null
 
         $connectionStringsConfig.DocumentElement.AppendChild($sessionElement) | Out-Null
