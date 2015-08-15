@@ -287,13 +287,13 @@ function Confirm-ConfigurationSettings([xml]$config)
         return $FALSE
     }
 
-    $sessionStateProvider = $config.InstallSettings.WebServer.SessionStateProvider
-    if ($sessionStateProvider.ToLower() -eq "mongo")
+    $sessionStateProvider = $config.InstallSettings.WebServer.SessionStateProvider.ToLower()
+    if ($sessionStateProvider -eq "mongo")
     {
         Write-Host "Mongo is not currently supported by installer for SessionStateProvider" -ForegroundColor Red
         return $FALSE
     }
-    elseif ($sessionStateProvider.ToLower() -ne "inproc" -and $sessionStateProvider.ToLower() -ne "mssql")
+    elseif ($sessionStateProvider -ne "inproc" -and $sessionStateProvider -ne "mssql")
     {
         Write-Host "SessionStateProvider selection is not recognized" -ForegroundColor Red
         return $FALSE
@@ -385,32 +385,33 @@ function Confirm-ConfigurationSettings([xml]$config)
         }
     }
 
-    if ([string]::IsNullOrEmpty($config.InstallSettings.Database.DatabaseInstallPath.Local))
+    if (Get-ConfigOption $config "Database/InstallDatabase")
     {
-        Write-Host "DatabaseInstallPath.Local cannot be null or empty" -ForegroundColor Red
-        return $FALSE
-    }
+        if ([string]::IsNullOrEmpty($config.InstallSettings.Database.DatabaseInstallPath.Local))
+        {
+            Write-Host "DatabaseInstallPath.Local cannot be null or empty" -ForegroundColor Red
+            return $FALSE
+        }
     
-    $isValidLoginConfiguration = Confirm-SqlLoginConfiguration $config
-    if (!$isValidLoginConfiguration)
+        if (!(Confirm-SqlInstallPath $config))
+        {
+            Write-Host "DatabaseInstallPath is not valid." -ForegroundColor Red
+            return $FALSE
+        }
+    }
+
+    if (!(Confirm-SqlLoginConfiguration $config))
     {
         Write-Host "The specified combination of accounts will not produce a valid SQL login for data access." -ForegroundColor Red
         return $FALSE
     }
 
-    $isSqlConnectionValid = Confirm-SqlConnectionAndRoles $config
-    if(!$isSqlConnectionValid)
+    if(!(Confirm-SqlConnectionAndRoles $config))
     {
         Write-Host "A problem has been detected with the SQL connection." -ForegroundColor Red
         return $FALSE
     }
 
-    $isValidSqlInstallPath = Confirm-SqlInstallPath $config
-    if (!$isValidSqlInstallPath)
-    {
-        Write-Host "DatabaseInstallPath is not valid." -ForegroundColor Red
-        return $FALSE
-    }
 
     if (!(Confirm-WebDatabseCopyNames $config))
     {
