@@ -567,7 +567,7 @@ function Get-DatabaseNames([xml]$config)
 
 function Get-DatabaseNamePrefix([xml]$config)
 {
-    return ("{0}Sitecore_" -f $config.InstallSettings.Database.DatabaseNamePrefix.Trim())
+    return ("{0}" -f $config.InstallSettings.Database.DatabaseNamePrefix.Trim())
 }
 
 function Attach-SitecoreDatabase([xml]$config, [string]$databaseName, [Microsoft.SqlServer.Management.Smo.Server]$sqlServerSmo)
