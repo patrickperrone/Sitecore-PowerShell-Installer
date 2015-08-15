@@ -1178,6 +1178,13 @@ function Start-Browser([string]$siteUrl)
 
 function Install-SitecoreApplication
 {
+    $currentPrincipal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+    if (!($currentPrincipal.IsInRole( [Security.Principal.WindowsBuiltInRole]::Administrator )))
+    {
+        write-host "Warning: PowerShell must run as an Administrator." -ForegroundColor Red
+        return
+    }
+    
     [xml]$config = Read-InstallConfigFile
     if ($config -eq $null)
     {
