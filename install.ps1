@@ -19,6 +19,32 @@ function Write-Message([xml]$config, [string]$message, [string]$messageColor, [b
     }
 }
 
+function Test-PreRequisites
+{
+    $currentPrincipal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+    if (!($currentPrincipal.IsInRole( [Security.Principal.WindowsBuiltInRole]::Administrator )))
+    {
+        write-host "Warning: PowerShell must run as an Administrator." -ForegroundColor Red
+        return $FALSE
+    }
+
+    $moduleName = "SQLPS"
+    if (!(Get-Module -ListAvailable -Name $moduleName))
+    {
+        Write-Host "Warning: IIS PowerShell Module ($moduleName) is not installed." -ForegroundColor Red
+        return $FALSE
+    }
+
+    $moduleName = "WebAdministration"
+    if (!(Get-Module -ListAvailable -Name $moduleName))
+    {
+        Write-Host "Warning: IIS PowerShell Module ($moduleName) is not installed." -ForegroundColor Red
+        return $FALSE
+    }
+
+    return $TRUE
+}
+
 function Read-InstallConfigFile
 {
     [xml]$Config = Get-Content ($scriptDir + "\install.config")
@@ -1179,10 +1205,9 @@ function Start-Browser([string]$siteUrl)
 
 function Install-SitecoreApplication
 {
-    $currentPrincipal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
-    if (!($currentPrincipal.IsInRole( [Security.Principal.WindowsBuiltInRole]::Administrator )))
+    if (!(Test-PreRequisites))
     {
-        write-host "Warning: PowerShell must run as an Administrator." -ForegroundColor Red
+        Write-Host "Aborting Install: Please satisify pre-requisites and try again." -ForegroundColor Red
         return
     }
     
