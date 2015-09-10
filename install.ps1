@@ -988,6 +988,7 @@ function Set-ConfigurationFiles([xml]$config)
     {
         $solrConfigPath = Join-Path $installPath -ChildPath "Website\App_Config\Include\Sitecore.ContentSearch.Solr.DefaultIndexConfiguration.config.example"
         $solrConfig = [xml](Get-Content $solrConfigPath)
+        $currentDate = (Get-Date).ToString("yyyyMMdd_hh-mm-s")
         $backup = $solrConfigPath + "__$currentDate"
         Write-Message $config "Backing up Sitecore.ContentSearch.Solr.DefaultIndexConfiguration.config.example" "White"
         $solrConfig.Save($backup)
