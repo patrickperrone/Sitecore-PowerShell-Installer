@@ -19,8 +19,33 @@ function Write-Message([xml]$config, [string]$message, [string]$messageColor, [b
     }
 }
 
+function Test-Module([string]$name)
+{
+    if(-not(Get-Module -name $name))
+    {
+        if(Get-Module -ListAvailable | Where-Object { $_.name -eq $name })
+        {
+            Write-Host "Importing $name module." -ForegroundColor Gray
+            Import-Module -Name $name
+            Write-Host "`n"
+            $TRUE
+        }
+        else
+        {
+            $FALSE
+        } 
+    }
+    else
+    {
+        write-host "$name module is already imported.`n" -ForegroundColor Gray
+        $TRUE
+    }
+}
+
 function Test-PreRequisites
 {
+    Write-Host "Testing script pre-requisites." -ForegroundColor Gray
+
     $currentPrincipal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
     if (!($currentPrincipal.IsInRole( [Security.Principal.WindowsBuiltInRole]::Administrator )))
     {
@@ -29,14 +54,18 @@ function Test-PreRequisites
     }
 
     $moduleName = "SQLPS"
-    if (!(Get-Module -ListAvailable -Name $moduleName))
+    if (!(Test-Module $moduleName))
     {
         Write-Host "Warning: IIS PowerShell Module ($moduleName) is not installed." -ForegroundColor Red
         return $FALSE
     }
+    else
+    {
+        Set-Location -Path $scriptDir
+    }
 
     $moduleName = "WebAdministration"
-    if (!(Get-Module -ListAvailable -Name $moduleName))
+    if (!(Test-Module $moduleName))
     {
         Write-Host "Warning: IIS PowerShell Module ($moduleName) is not installed." -ForegroundColor Red
         return $FALSE
