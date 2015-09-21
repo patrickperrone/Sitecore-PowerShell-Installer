@@ -1066,7 +1066,7 @@ function Set-FileSystemPermissions([xml]$config, [string]$iisSiteName)
     $installPath = Join-path $config.InstallSettings.WebServer.SitecoreInstallRoot -ChildPath $config.InstallSettings.WebServer.SitecoreInstallFolder
 
     # Get app pool from site name
-    $site = Get-Website -Name $iisSiteName
+    $site = Get-Item "IIS:\sites\$iisSiteName" 
     $appPoolName = $site.applicationPool
     $pool = Get-Item IIS:\AppPools\$appPoolName
 
