@@ -56,7 +56,7 @@ function Test-PreRequisites
     $moduleName = "SQLPS"
     if (!(Test-Module $moduleName))
     {
-        Write-Host "Warning: IIS PowerShell Module ($moduleName) is not installed." -ForegroundColor Red
+        Write-Host "Warning: SQL PowerShell Module ($moduleName) is not installed." -ForegroundColor Red
         return $FALSE
     }
     else
