@@ -19,6 +19,16 @@ function Write-Message([xml]$config, [string]$message, [string]$messageColor, [b
     }
 }
 
+function Remove-BackupFiles([System.Collections.Generic.List[string]]$backupFiles)
+{
+    Write-Message $config "`nDeleting backed up files..." "Green"
+    foreach ($file in $backupFiles)
+    {
+        Remove-Item $file
+    }
+    Write-Message $config "Removed back ups!" "White"
+}
+
 function Test-Module([string]$name)
 {
     if(-not(Get-Module -name $name))
@@ -467,11 +477,20 @@ function Confirm-ConfigurationSettings([xml]$config)
         return $FALSE
     }
 
-
     if (!(Confirm-WebDatabseCopyNames $config))
     {
         Write-Host "There is a duplicate name in WebDatabaseCopies. Please remove the entry." -ForegroundColor Red
         return $FALSE
+    }
+
+    if (Get-ConfigOption $config "WebServer/CDServerSettings/ConfigureFilesForCD")
+    {
+        $folderName = $config.InstallSettings.WebServer.CDServerSettings.LastChildFolderOfIncludeDirectory
+        if (!($folderName.StartsWith("z")) -and !($folderName.StartsWith("Z")))
+        {
+            Write-Host "LastChildFolderOfIncludeDirectory should have a name that guarantees it is the last folder (alphanumerically) in the /Include directory. Try prepending one or more 'z' characters to the name." -ForegroundColor Red
+            return $FALSE
+        }
     }
 
     return $TRUE
@@ -494,7 +513,7 @@ function Find-FolderInZipFile($items, [string]$folderName)
 
 function Get-SubstituteDatabaseFileName($currentFileName, $dbName)
 {
-    # function assumes name format will be Sitecore.{$dbname}.{ldf|mdf}
+    # Function assumes name format will be Sitecore.{$dbname}.{ldf|mdf}
     $prefix = $currentFileName.Substring(0,8)
     $suffix = $currentFileName.Substring($currentFileName.Length-3)
     return ("{0}.{1}.{2}" -f $prefix,$dbName,$suffix)
@@ -887,6 +906,8 @@ function Set-ConfigurationFiles([xml]$config)
 {
     Write-Message $config "`nWriting changes to config files..." "Green"
 
+    $backupFiles = New-Object 'System.Collections.Generic.List[string]'
+
     $installPath = Join-path $config.InstallSettings.WebServer.SitecoreInstallRoot -ChildPath $config.InstallSettings.WebServer.SitecoreInstallFolder
 
     # Edit web.config
@@ -896,6 +917,7 @@ function Set-ConfigurationFiles([xml]$config)
     $backup = $webConfigPath + "__$currentDate"
     Write-Message $config "Backing up Web.config" "White"
     $webconfig.Save($backup)
+    $backupFiles.Add($backup)
 
     $dataFolderPath = Join-Path $installPath -ChildPath "Data"
     $webconfig.configuration.SelectSingleNode("sitecore/sc.variable[@name='dataFolder']").SetAttribute("value", $dataFolderPath)
@@ -918,6 +940,7 @@ function Set-ConfigurationFiles([xml]$config)
     $backup = $connectionStringsPath + "__$currentDate"
     Write-Message $config "Backing up ConnectionStrings.config" "White"
     $connectionStringsConfig.Save($backup)
+    $backupFiles.Add($backup)
 
     $baseConnectionString = Get-BaseConnectionString $config
     foreach ($databaseName in (Get-DatabaseNames $config))
@@ -1011,7 +1034,6 @@ function Set-ConfigurationFiles([xml]$config)
     Write-Message $config "Saving ConnectionStrings.config" "White"
     $connectionStringsConfig.Save($connectionStringsPath)
 
-
     # Edit Sitecore.ContentSearch.Solr.DefaultIndexConfiguration.config.example
     if (!([string]::IsNullOrEmpty($config.InstallSettings.WebServer.Solr.ServiceBaseAddress)))
     {
@@ -1021,6 +1043,7 @@ function Set-ConfigurationFiles([xml]$config)
         $backup = $solrConfigPath + "__$currentDate"
         Write-Message $config "Backing up Sitecore.ContentSearch.Solr.DefaultIndexConfiguration.config.example" "White"
         $solrConfig.Save($backup)
+        $backupFiles.Add($backup)
 
         $solrConfig.configuration.SelectSingleNode("sitecore/settings/setting[@name='ContentSearch.Solr.ServiceBaseAddress']").SetAttribute("value", $config.InstallSettings.WebServer.Solr.ServiceBaseAddress)
         Write-Message $config "Changing Solr ServiceBaseAddress" "White"
@@ -1030,6 +1053,7 @@ function Set-ConfigurationFiles([xml]$config)
     }
 
     Write-Message $config "Modifying config files complete!" "White"
+    return $backupFiles
 }
 
 function Set-AclForFolder([string]$userName, [string]$permission, [string]$folderPath)
@@ -1234,7 +1258,6 @@ function Get-FilesToEnableOnCDServer([xml]$config)
     return $files | % { Join-Path $webrootPath -ChildPath $_ }
 }
 
-
 function Enable-FilesForCDServer([xml]$config)
 {
     Write-Message $config "Enabling files required by a CD server." "White"
@@ -1251,7 +1274,6 @@ function Enable-FilesForCDServer([xml]$config)
             $match = Get-Item ($file + ".*") | Select-Object -First 1
 
             $filename = Split-Path $file -leaf
-            Write-Host $filename -ForegroundColor Cyan
             if ($filename -eq "SwitchMasterToWeb.config")
             {
                 $filepath = Split-Path $file
@@ -1307,7 +1329,7 @@ function Apply-SecuritySettings([xml]$config, [string]$iisSiteName)
         Set-IpRestrictions $config $iisSiteName
     }
 
-    if (Get-ConfigOption $config "WebServer/CDServerSettings/DisableFilesNotNeededForCD")
+    if (Get-ConfigOption $config "WebServer/CDServerSettings/ConfigureFilesForCD")
     {
         Disable-FilesForCDServer $config
         Enable-FilesForCDServer $config
@@ -1336,6 +1358,8 @@ function Start-Browser([string]$siteUrl)
 
 function Install-SitecoreApplication
 {
+    $deleteBackupFiles = $TRUE
+
     if (!(Test-PreRequisites))
     {
         Write-Host "Aborting Install: Please satisify pre-requisites and try again." -ForegroundColor Red
@@ -1367,27 +1391,43 @@ function Install-SitecoreApplication
     $message = "Starting Sitecore install - $date" 
     Write-Message $config $message "Green"
 
-    $loginName = $config.InstallSettings.Database.SqlLoginForInstall
-    Write-Message $config "Using $loginName as the SQL login during installation" "White"
-    $loginName = Get-SqlLoginAccountForDataAccess $config
-    Write-Message $config "Using $loginName as the SQL login for data access" "White"
+    try
+    {
+        $loginName = $config.InstallSettings.Database.SqlLoginForInstall
+        Write-Message $config "Using $loginName as the SQL login during installation" "White"
+        $loginName = Get-SqlLoginAccountForDataAccess $config
+        Write-Message $config "Using $loginName as the SQL login for data access" "White"
 
-    Copy-SitecoreFiles $config
+        Copy-SitecoreFiles $config
 
-    Set-ConfigurationFiles $config
+        [System.Collections.Generic.List[string]]$backupFiles = Set-ConfigurationFiles $config
 
-    $iisSiteName = Initialize-WebSite $config
+        $iisSiteName = Initialize-WebSite $config
 
-    Apply-SecuritySettings $config $iisSiteName
+        Apply-SecuritySettings $config $iisSiteName
 
-    Initialize-SitecoreDatabases $config
+        Initialize-SitecoreDatabases $config
+    }
+    catch [Exception]
+    {
+        Write-Message $config  ($_.Exception.Message) "Red"
+        Write-Message $config "Aborting install." "Red"
+        $deleteBackupFiles = $FALSE
+    }
+    finally
+    {
+        if ($deleteBackupFiles)
+        {
+            Remove-BackupFiles $backupFiles
+        }
 
-    $stopWatch.Stop()
-    $message = "`nSitecore install finished - Elapsed time {0}:{1:D2} minute(s)" -f $stopWatch.Elapsed.Minutes, $stopWatch.Elapsed.Seconds
-    Write-Message $config $message "Green"
+        $stopWatch.Stop()
+        $message = "`nSitecore install finished - Elapsed time {0}:{1:D2} minute(s)" -f $stopWatch.Elapsed.Minutes, $stopWatch.Elapsed.Seconds
+        Write-Message $config $message "Green"
 
-    $siteUrl = "http://" + $config.InstallSettings.WebServer.IISHostName
-    Start-Browser $siteUrl
+        $siteUrl = "http://" + $config.InstallSettings.WebServer.IISHostName
+        Start-Browser $siteUrl
+    }
 }
 
 Install-SitecoreApplication
