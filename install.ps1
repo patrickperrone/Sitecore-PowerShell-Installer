@@ -298,6 +298,48 @@ function Confirm-WebDatabseCopyNames([xml]$config)
     return $TRUE
 }
 
+function Confirm-IISBindings([xml]$config)
+{
+    $bindings = $config.InstallSettings.WebServer.IISBindings.Binding
+    foreach ($binding in $bindings)
+    {
+        if ($binding.IP.Length -eq 0)
+        {
+            Write-Host "Binding must contain a non-empty IP attribute." -ForegroundColor Red
+            return $FALSE
+        }
+
+        if ($binding.IP -ne "*" -and !([bool]($binding.IP -as [ipaddress])))
+        {
+            Write-Host "Binding's IP attribute must either be a valid IP or the '*' character." -ForegroundColor Red
+            return $FALSE
+        }
+
+        if ($binding.Port.Length -eq 0)
+        {
+            Write-Host "Binding must contain a non-empty Port attribute." -ForegroundColor Red
+            return $FALSE
+        }
+
+        try
+        {
+            [int]$port = $binding.Port
+            if ($port -lt 1 -or $port -gt 65535)
+            {
+                Write-Host "Binding Port must be in the range 1-65535." -ForegroundColor Red
+                return $FALSE
+            }
+        }
+        catch [Exception]
+        {
+            Write-Host ($_.Exception.Message) -ForegroundColor Red
+            return $FALSE   
+        }
+    }
+
+    return $TRUE
+}
+
 function Confirm-ConfigurationSettings([xml]$config)
 {
     if ([string]::IsNullOrEmpty($config.InstallSettings.SitecoreZipPath))
@@ -396,10 +438,18 @@ function Confirm-ConfigurationSettings([xml]$config)
         }
     }
 
-    if ([string]::IsNullOrEmpty($config.InstallSettings.WebServer.IISHostName))
+    if ($config.InstallSettings.WebServer.IISBindings.Binding.Count -lt 1)
     {
-        Write-Host "IISHostName cannot be null or empty" -ForegroundColor Red
+        Write-Host "IISBindings should provide at least one Binding." -ForegroundColor red
         return $FALSE
+    }
+    else
+    {
+        if (!(Confirm-IISBindings $config))
+        {
+            Write-Host "There was a problem with an IIS Binding." -ForegroundColor Red
+            return $FALSE
+        }
     }
 
     if ([string]::IsNullOrEmpty($config.InstallSettings.Database.SqlServerName))
@@ -846,15 +896,36 @@ function Initialize-WebSite([xml]$config)
     else
     {
         Write-Message $config "Provisioning new IIS site name $iisSiteName" "White"
-        $hostName = $config.InstallSettings.WebServer.IISHostName
         $installPath = Join-Path $config.InstallSettings.WebServer.SitecoreInstallRoot -ChildPath $config.InstallSettings.WebServer.SitecoreInstallFolder
-        $sitePath = Join-Path $installPath -ChildPath "Website"
-        New-Website -Name $iisSiteName -Port 80 -HostHeader $hostname -PhysicalPath $sitePath -ApplicationPool $appPoolName -force | Out-Null
+        $sitePath = Join-Path $installPath -ChildPath "Website"        
+        $bindings = $config.InstallSettings.WebServer.IISBindings.Binding
+        $bindingIndex = 1
+        foreach ($binding in $bindings)
+        {
+            if ($bindingIndex -eq 1)
+            {
+                New-Website -Name $iisSiteName -IPAddress $binding.IP -Port $binding.Port -HostHeader $binding.HostHeader -PhysicalPath $sitePath -ApplicationPool $appPoolName -force | Out-Null
+            }
+            else
+            {
+                New-WebBinding -Name $iisSiteName -IPAddress $binding.IP -Port $binding.Port -HostHeader $binding.HostHeader
+            }
 
-        # Add hostname to hosts file
-        Write-Message $config "Add $hostName to hosts file" "White"
-        $hostsPath = "$env:windir\System32\drivers\etc\hosts"
-        Add-Content $hostsPath "`n127.0.0.1 $hostName"
+            if ($binding.HostHeader.Length -ne 0)
+            {
+                # Add hostname to hosts file
+                Write-Message $config "Add $($binding.HostHeader) to hosts file" "White"
+                $hostsPath = "$env:windir\System32\drivers\etc\hosts"
+                $ip = $binding.IP
+                if ($ip -eq "*")
+                {
+                    $ip = "127.0.0.1"
+                }
+                Add-Content $hostsPath "$ip $($binding.HostHeader)"
+            }
+
+            $bindingIndex++
+        }
     }
 
     Write-Message $config "IIS site initialization complete!" "White"
