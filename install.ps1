@@ -1419,8 +1419,34 @@ function Apply-SecuritySettings([xml]$config, [string]$iisSiteName)
     Write-Message $config "Security settings complete!" "White"
 }
 
+function Get-SiteUrl([xml]$config)
+{
+    $binding = $config.InstallSettings.WebServer.IISBindings.Binding | Select-Object -First 1
+
+    $hostname = $binding.HostHeader
+    if ($hostname.Length -eq 0)
+    {
+        $hostname = $binding.IP
+        if ($hostname -eq "*")
+        {
+            $hostname = "127.0.0.1"
+        }
+    }
+
+    $url = "http://" + $hostname
+
+    $port = $binding.Port
+    if ($port -ne "80")
+    {
+        $url = $url + ":" + $port
+    }
+
+    return $url
+}
+
 function Start-Browser([string]$siteUrl)
 {
+    $siteUrl = Get-SiteUrl $config
     Write-Host "`nLaunching site in browser: $siteUrl"
     $ie = new-object -comobject "InternetExplorer.Application" 
     $ie.visible = $true
@@ -1496,8 +1522,7 @@ function Install-SitecoreApplication
         $message = "`nSitecore install finished - Elapsed time {0}:{1:D2} minute(s)" -f $stopWatch.Elapsed.Minutes, $stopWatch.Elapsed.Seconds
         Write-Message $config $message "Green"
 
-        $siteUrl = "http://" + $config.InstallSettings.WebServer.IISHostName
-        Start-Browser $siteUrl
+        Start-Browser $config
     }
 }
 
