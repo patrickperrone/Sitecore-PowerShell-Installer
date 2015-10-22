@@ -4,6 +4,7 @@ The Sitecore-PowerShell-Installer script enables you to install Production-ready
 
 ### Features of the Project
 - Install Sitecore with or without the databases.
+- Supports installing a CD, CM, or Publishing server
 - Script sanity checks SQL and input validation prior to making any changes
 - Write output to the screen and to a log file.
 - Fine-grained control of the application pool identity (built-in or domain account)
