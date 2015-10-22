@@ -1708,7 +1708,7 @@ function Install-SitecoreApplication
 
     if (!(Test-PreRequisites))
     {
-        Write-Host "Aborting Install: Please satisify pre-requisites and try again." -ForegroundColor Red
+        Write-Host "Aborting Install: Please satisfy pre-requisites and try again." -ForegroundColor Red
         return
     }
     
