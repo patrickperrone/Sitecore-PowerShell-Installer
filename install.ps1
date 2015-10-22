@@ -90,14 +90,35 @@ function Read-InstallConfigFile
     return $Config
 }
 
-function Get-ConfigOption([xml]$config, [string]$optionName)
+function Get-ConfigOption([xml]$config, [string]$optionName, [bool]$isAttribute=$FALSE)
 {
     $optionValue = $FALSE
-    $nodeValue = $config.InstallSettings.SelectSingleNode($optionName).InnerText
-    if (!([string]::IsNullOrEmpty($nodeValue)))
+
+    if ($isAttribute)
     {
-        $optionValue = [System.Convert]::ToBoolean($nodeValue)
+        $attributeName = Split-Path -Leaf $optionName
+        $optionName = Split-Path $optionName
+        $optionName = $optionName.Replace("\", "//")
+        $node = $config.InstallSettings.SelectSingleNode($optionName)
+
+        if ($node -ne $null)
+        {
+            $attributeValue = $node.GetAttribute($attributeName)
+            if (!([string]::IsNullOrEmpty($attributeValue)))
+            {
+                $optionValue = [System.Convert]::ToBoolean($attributeValue)
+            }
+        }
     }
+    else
+    {
+        $nodeValue = $config.InstallSettings.SelectSingleNode($optionName).InnerText
+        if (!([string]::IsNullOrEmpty($nodeValue)))
+        {
+            $optionValue = [System.Convert]::ToBoolean($nodeValue)
+        }
+    }
+
     return $optionValue
 }
 
@@ -340,6 +361,18 @@ function Confirm-IISBindings([xml]$config)
     return $TRUE
 }
 
+function Test-PublishingServerRole([xml]$config)
+{
+    if (Get-ConfigOption $config "WebServer/CMServerSettings/enabled" $TRUE)
+    {
+        if (!([string]::IsNullOrEmpty($config.InstallSettings.WebServer.CMServerSettings.Publishing.PublishingInstance)))
+        {
+            return $TRUE
+        }
+    }
+    return $FALSE
+}
+
 function Confirm-ConfigurationSettings([xml]$config)
 {
     if ([string]::IsNullOrEmpty($config.InstallSettings.SitecoreZipPath))
@@ -452,6 +485,24 @@ function Confirm-ConfigurationSettings([xml]$config)
         }
     }
 
+    if ((Get-ConfigOption $config "WebServer/CMServerSettings/enabled" $TRUE) -and (Get-ConfigOption $config "WebServer/CDServerSettings/enabled" $TRUE))
+    {
+        Write-Host "CMServerSettings and CDServerSettings are both enabled. The Sitecore instance cannot be a CM and a CD server at the same time." -ForegroundColor Red
+        return $FALSE
+    }
+
+    if (Get-ConfigOption $config "WebServer/CMServerSettings/enabled" $TRUE)
+    {
+        if (!([string]::IsNullOrEmpty($config.InstallSettings.WebServer.CMServerSettings.Publishing.InstanceName)))
+        {
+            if ([string]::IsNullOrEmpty($config.InstallSettings.WebServer.CMServerSettings.InstanceName))
+            {
+                Write-Host "You cannot use a Publishing.InstanceName without also specifying an InstanceName." -ForegroundColor Red
+                return $FALSE
+            }
+        }
+    }
+
     if ([string]::IsNullOrEmpty($config.InstallSettings.Database.SqlServerName))
     {
         Write-Host "SqlServerName cannot be null or empty" -ForegroundColor Red
@@ -533,12 +584,61 @@ function Confirm-ConfigurationSettings([xml]$config)
         return $FALSE
     }
 
-    if (Get-ConfigOption $config "WebServer/CDServerSettings/ConfigureFilesForCD")
+    if (Get-ConfigOption $config "WebServer/CDServerSettings/enabled" $TRUE -and Get-ConfigOption $config "WebServer/CDServerSettings/ConfigureFilesForCD")
     {
         $folderName = $config.InstallSettings.WebServer.CDServerSettings.LastChildFolderOfIncludeDirectory
         if (!($folderName.StartsWith("z")) -and !($folderName.StartsWith("Z")))
         {
-            Write-Host "LastChildFolderOfIncludeDirectory should have a name that guarantees it is the last folder (alphanumerically) in the /Include directory. Try prepending one or more 'z' characters to the name." -ForegroundColor Red
+            Write-Host "CDServerSettings.LastChildFolderOfIncludeDirectory should have a name that guarantees it is the last folder (alphanumerically) in the /Include directory. Try prepending one or more 'z' characters to the name." -ForegroundColor Red
+            return $FALSE
+        }
+    }
+
+    if (Test-PublishingServerRole $config)
+    {
+        $folderName = $config.InstallSettings.WebServer.CMServerSettings.LastChildFolderOfIncludeDirectory
+        if (!($folderName.StartsWith("z")) -and !($folderName.StartsWith("Z")))
+        {
+            Write-Host "CMServerSettings.LastChildFolderOfIncludeDirectory should have a name that guarantees it is the last folder (alphanumerically) in the /Include directory. Try prepending one or more 'z' characters to the name." -ForegroundColor Red
+            return $FALSE
+        }
+
+        [int]$degrees = $null
+        if (!([int32]::TryParse($config.InstallSettings.WebServer.CMServerSettings.Publishing.Parallel.MaxDegreesOfParallelism, [ref]$degrees)))
+        {
+            Write-Host "MaxDegreesOfParallelism must be an integer." -ForegroundColor red
+            return $FALSE
+        }
+
+        [int]$growthsize = $null
+        if (!([int32]::TryParse($config.InstallSettings.WebServer.CMServerSettings.Publishing.Parallel.WebDatabaseAutoGrowthInMB, [ref]$growthsize)))
+        {
+            Write-Host "WebDatabaseAutoGrowthInMB must be an integer." -ForegroundColor red
+            return $FALSE
+        }
+        elseif ($growthsize -lt 10)
+        {
+            Write-Host "WebDatabaseAutoGrowthInMB cannot be less than 10MB." -ForegroundColor red
+            return $FALSE
+        }
+        elseif ($growthsize -gt 100)
+        {
+            Write-Host "WebDatabaseAutoGrowthInMB cannot be greater than 100MB." -ForegroundColor red
+            return $FALSE
+        }
+
+        [int]$timeout = $null
+        if ([int32]::TryParse($config.InstallSettings.WebServer.CMServerSettings.Publishing.AppPoolIdleTimeout, [ref]$timeout))
+        {
+            if ($timeout -gt 43200)
+            {
+                Write-Host "AppPoolIdleTimeout must be less than or equal to 43200." -ForegroundColor red
+                return $FALSE
+            }
+        }
+        else
+        {
+            Write-Host "AppPoolIdleTimeout must be an integer." -ForegroundColor red
             return $FALSE
         }
     }
@@ -792,6 +892,29 @@ function Grant-DatabasePermissions([xml]$config, [string]$databaseName, [Microso
     Write-Message $config "Granted Execute permission to $loginName on $database" "White"
 }
 
+function Set-DatabaseGrowth([xml]$config, [string]$databaseName, [Microsoft.SqlServer.Management.Smo.Server]$sqlServerSmo)
+{
+    $fullDatabaseName = (Get-DatabaseNamePrefix $config) + $databaseName
+    $database = $sqlServerSmo.Databases[$fullDatabaseName]
+    [int]$growthsize = $config.InstallSettings.WebServer.CMServerSettings.Publishing.Parallel.WebDatabaseAutoGrowthInMB
+
+    Write-Message $config "Setting Autogrowth size for $fullDatabaseName to $($growthsize)MB" "White"
+
+    foreach ($file in $database.FileGroups.Files)
+    {
+        $file.GrowthType = "kb"
+        $file.Growth = $growthsize * 1024
+        $file.Alter()
+    }
+
+    foreach ($logfile in $database.LogFiles)
+    {
+        $logfile.GrowthType = "kb"
+        $logfile.Growth = $growthsize * 1024
+        $logfile.Alter()
+    }
+}
+
 function Initialize-SitecoreDatabases([xml]$config)
 {
     Write-Message $config "`nInitializing Sitecore Databases..." "Green"
@@ -799,9 +922,12 @@ function Initialize-SitecoreDatabases([xml]$config)
     [Microsoft.SqlServer.Management.Smo.Server]$sqlServerSmo = Get-SqlServerSmo $config
 
     $databaseNames = (Get-DatabaseNames $config)
+    $webDatabaseNames = New-Object 'System.Collections.Generic.List[string]'
+    $webDatabaseNames.Add("Web")
     foreach ($copy in $config.InstallSettings.Database.WebDatabaseCopies.copy)
     {
         $databaseNames += $copy.Trim()
+        $webDatabaseNames.Add($copy.Trim())
     }
 
     foreach ($dbname in $databaseNames)
@@ -809,6 +935,12 @@ function Initialize-SitecoreDatabases([xml]$config)
         $fullDatabaseName = Attach-SitecoreDatabase $config $dbname $sqlServerSmo
         Set-DatabaseRoles $config $fullDatabaseName $sqlServerSmo
         Grant-DatabasePermissions $config $fullDatabaseName $sqlServerSmo
+    }
+
+    foreach ($webDbName in $webDatabaseNames)
+    {
+        Write-Host $webDbName -ForegroundColor Yellow
+        Set-DatabaseGrowth $config $webDbName $sqlServerSmo
     }
 
     Write-Message $config "Database initialization complete!" "White"
@@ -884,6 +1016,19 @@ function Initialize-WebSite([xml]$config)
         $pool.managedRuntimeVersion = $config.InstallSettings.WebServer.DefaultRuntimeVersion
         $pool.processModel.loadUserProfile = $TRUE
         $pool.processModel.maxProcesses = 1
+
+        if (Test-PublishingServerRole $config)
+        {
+            $pool.startMode = "AlwaysRunning"
+            [int]$timeout = $config.InstallSettings.WebServer.CMServerSettings.Publishing.AppPoolIdleTimeout
+            if ($timeout -gt $pool.recycling.periodicRestart.time.TotalMinutes)
+            {
+                Write-Message $config "AppPoolIdleTimeout of $timeout minutes cannot be greater than the app pool's periodic restart time, using $($pool.recycling.periodicRestart.time.TotalMinutes) minutes instead." "Yellow"
+                $timeout = $pool.recycling.periodicRestart.time.TotalMinutes
+            }
+            $pool.processModel.idleTimeout = [TimeSpan]::FromMinutes($timeout)
+        }
+
         $pool | Set-Item
     }
 
@@ -958,256 +1103,6 @@ function Get-BaseConnectionString([xml]$config)
     }
 
     return $baseConnectionString
-}
-
-function Copy-SwitchMasterToWeb([xml]$config, [string]$installPath)
-{
-    $folderPath = Join-path $installPath -ChildPath "Website\App_Config\Include\zzzMustBeLast"
-    New-Item $folderPath -type directory -force | Out-Null
-
-    $destination = Join-path $folderPath -ChildPath "SwitchMasterToWeb.config"
-    $source = Join-path $installPath -ChildPath "Website\App_Config\Include\SwitchMasterToWeb.config.example"
-
-    Copy-Item $source $destination
-    
-    Write-Message $config "Saved SwitchMasterToWeb.config to $folderPath" "White"
-}
-
-function Set-ConfigurationFiles([xml]$config)
-{
-    Write-Message $config "`nWriting changes to config files..." "Green"
-
-    $backupFiles = New-Object 'System.Collections.Generic.List[string]'
-
-    $installPath = Join-path $config.InstallSettings.WebServer.SitecoreInstallRoot -ChildPath $config.InstallSettings.WebServer.SitecoreInstallFolder
-
-    # Edit web.config
-    $webConfigPath = Join-Path $installPath -ChildPath "Website\web.config"
-    $webconfig = [xml](Get-Content $webConfigPath)
-    $currentDate = (Get-Date).ToString("yyyyMMdd_hh-mm-s")
-    $backup = $webConfigPath + "__$currentDate"
-    Write-Message $config "Backing up Web.config" "White"
-    $webconfig.Save($backup)
-    $backupFiles.Add($backup)
-
-    $dataFolderPath = Join-Path $installPath -ChildPath "Data"
-    $webconfig.configuration.SelectSingleNode("sitecore/sc.variable[@name='dataFolder']").SetAttribute("value", $dataFolderPath)
-
-    # Modify sessionState element
-    if ($config.InstallSettings.WebServer.SessionStateProvider.ToLower() -eq "mssql")
-    {
-        $webconfig.configuration.SelectSingleNode("system.web/sessionState").SetAttribute("mode", "Custom")
-        $webconfig.configuration.SelectSingleNode("system.web/sessionState").SetAttribute("customProvider", "mssql")
-        Write-Message $config "Changing session state provider to MSSQL" "White"
-    }
-
-    Write-Message $config "Saving changes to Web.config" "White"
-    $webconfig.Save($webConfigPath)
-
-
-    # Edit connectionStrings.config
-    $connectionStringsPath = Join-Path $installPath -ChildPath "Website\App_Config\ConnectionStrings.config"
-    $connectionStringsConfig = [xml](Get-Content $connectionStringsPath)
-    $backup = $connectionStringsPath + "__$currentDate"
-    Write-Message $config "Backing up ConnectionStrings.config" "White"
-    $connectionStringsConfig.Save($backup)
-    $backupFiles.Add($backup)
-
-    $baseConnectionString = Get-BaseConnectionString $config
-    foreach ($databaseName in (Get-DatabaseNames $config))
-    {
-        $dbname = $databaseName.ToLower()
-        $fullDatabaseName = (Get-DatabaseNamePrefix $config) + $databaseName
-        $connectionString = $baseConnectionString + $fullDatabaseName + ";"
-
-        $node = $connectionStringsConfig.SelectSingleNode("connectionStrings/add[@name='$dbname']")
-        if ($node -ne $null)
-        {
-            $node.SetAttribute("connectionString", $connectionString);
-        }
-    }
-
-    # Add additional connection strings for each web database copy
-     $dbCopies = $config.InstallSettings.Database.WebDatabaseCopies
-     foreach ($copy in $dbCopies.copy)
-     {
-        $dbElement = $connectionStringsConfig.CreateElement("add")
-
-        $dbAttr = $connectionStringsConfig.CreateAttribute("name")
-        $dbAttr.Value = $copy.Trim()
-        $dbElement.Attributes.Append($dbAttr) | Out-Null
-        
-        $dbAttr = $connectionStringsConfig.CreateAttribute("connectionString")
-        $dbAttr.Value = $baseConnectionString + (Get-DatabaseNamePrefix $config) + $copy.Trim() + ";"
-        $dbElement.Attributes.Append($dbAttr) | Out-Null
-
-        $connectionStringsConfig.DocumentElement.AppendChild($dbElement) | Out-Null
-        Write-Message $config "Addedd a $($copy.Trim()) connection string" "White"
-     }
-
-    # Optionally add a session connection string
-    if ($config.InstallSettings.WebServer.SessionStateProvider.ToLower() -eq "mssql")
-    {
-        $sessionElement = $connectionStringsConfig.CreateElement("add")
-
-        $sessionAttr = $connectionStringsConfig.CreateAttribute("name")
-        $sessionAttr.Value = "session"
-        $sessionElement.Attributes.Append($sessionAttr) | Out-Null
-
-        $sessionAttr = $connectionStringsConfig.CreateAttribute("connectionString")
-        $sessionAttr.Value = $baseConnectionString + (Get-DatabaseNamePrefix $config) + "Sessions;"
-        $sessionElement.Attributes.Append($sessionAttr) | Out-Null
-
-        $connectionStringsConfig.DocumentElement.AppendChild($sessionElement) | Out-Null
-        Write-Message $config "Addedd a session connection string" "White"
-    }
-
-    # Modify Mongo connection strings
-    if (!([string]::IsNullOrEmpty($config.InstallSettings.WebServer.MongoDb.HostName)))
-    {
-        $mongoNodes = $connectionStringsConfig.SelectNodes("connectionStrings/add[contains(@connectionString, 'mongodb://')]")
-        foreach ($node in $mongoNodes)
-        {
-            $url = [System.Uri]($node.connectionString)
-
-            $builder = New-Object System.UriBuilder
-            $builder.Scheme = $url.Scheme
-            $builder.Host = $config.InstallSettings.WebServer.MongoDb.HostName
-            if (!([string]::IsNullOrEmpty($config.InstallSettings.WebServer.MongoDb.Port)))
-            {
-                $builder.Port = $config.InstallSettings.WebServer.MongoDb.Port
-            }
-            $builder.Path = $url.AbsolutePath
-
-            $node.SetAttribute("connectionString", $builder.ToString())
-        }
-
-        Write-Message $config "Changing host name for MongoDb connection strings" "White"
-    }
-
-    # Comment out connection strings not needed by CD server
-    if (Get-ConfigOption $config "WebServer/CDServerSettings/DeactivateConnectionStrings")
-    {
-        $node = $connectionStringsConfig.SelectSingleNode("connectionStrings/add[@name='master']")
-        $node.ParentNode.InnerXml = $node.ParentNode.InnerXml.Replace($node.OuterXml, $node.OuterXml.Insert(0, "<!--").Insert($node.OuterXml.Length+4, "-->"))
-
-        $node = $connectionStringsConfig.SelectSingleNode("connectionStrings/add[@name='tracking.history']")
-        $node.ParentNode.InnerXml = $node.ParentNode.InnerXml.Replace($node.OuterXml, $node.OuterXml.Insert(0, "<!--").Insert($node.OuterXml.Length+4, "-->"))
-
-        $node = $connectionStringsConfig.SelectSingleNode("connectionStrings/add[@name='reporting']")
-        $node.ParentNode.InnerXml = $node.ParentNode.InnerXml.Replace($node.OuterXml, $node.OuterXml.Insert(0, "<!--").Insert($node.OuterXml.Length+4, "-->"))
-
-        Write-Message $config "Commenting out connection strings not need on CD server" "White"
-
-        Copy-SwitchMasterToWeb $config $installPath
-    }
-
-    Write-Message $config "Saving ConnectionStrings.config" "White"
-    $connectionStringsConfig.Save($connectionStringsPath)
-
-    # Edit Sitecore.ContentSearch.Solr.DefaultIndexConfiguration.config.example
-    if (!([string]::IsNullOrEmpty($config.InstallSettings.WebServer.Solr.ServiceBaseAddress)))
-    {
-        $solrConfigPath = Join-Path $installPath -ChildPath "Website\App_Config\Include\Sitecore.ContentSearch.Solr.DefaultIndexConfiguration.config.example"
-        $solrConfig = [xml](Get-Content $solrConfigPath)
-        $currentDate = (Get-Date).ToString("yyyyMMdd_hh-mm-s")
-        $backup = $solrConfigPath + "__$currentDate"
-        Write-Message $config "Backing up Sitecore.ContentSearch.Solr.DefaultIndexConfiguration.config.example" "White"
-        $solrConfig.Save($backup)
-        $backupFiles.Add($backup)
-
-        $solrConfig.configuration.SelectSingleNode("sitecore/settings/setting[@name='ContentSearch.Solr.ServiceBaseAddress']").SetAttribute("value", $config.InstallSettings.WebServer.Solr.ServiceBaseAddress)
-        Write-Message $config "Changing Solr ServiceBaseAddress" "White"
-
-        Write-Message $config "Saving Sitecore.ContentSearch.Solr.DefaultIndexConfiguration.config.example" "White"
-        $solrConfig.Save($solrConfigPath)
-    }
-
-    Write-Message $config "Modifying config files complete!" "White"
-    return $backupFiles
-}
-
-function Set-AclForFolder([string]$userName, [string]$permission, [string]$folderPath)
-{
-    $acl = Get-Acl $folderPath
-    $rule = New-Object System.Security.AccessControl.FileSystemAccessRule($userName, $permission, "ContainerInherit,ObjectInherit", "None", "Allow")
-    $acl.SetAccessRule($rule)
-    Set-Acl $folderPath $acl
-    Write-Message $config "Added $userName to ACL ($permission) for $folderPath" "White"
-}
-
-function Confirm-IsUserMemberOfLocalGroup([string]$groupName, [string]$userName)
-{
-    $group =[ADSI]"WinNT://$env:COMPUTERNAME/$groupName,group" 
-    $members = @($group.psbase.Invoke("Members")) 
-
-    foreach ($member in $members)
-    {
-        $memberName = $member.GetType().InvokeMember("Name", 'GetProperty', $null, $member, $null)
-        if ($memberName -eq $userName)
-        {
-            return $TRUE
-        }
-    }
-
-    return $FALSE
-}
-
-function Add-AppPoolIdentityToLocalGroup([xml]$config, [string]$groupName, [string]$iisSiteName)
-{
-    if ($config.InstallSettings.WebServer.AppPoolIdentity -eq "ApplicationPoolIdentity")
-    {
-        $domain = "IIS APPPOOL"
-        $site = Get-Website -Name $iisSiteName
-        $userName = $site.applicationPool
-    }
-    elseif ($config.InstallSettings.WebServer.AppPoolIdentity -eq "NetworkService")
-    {
-        $domain = "NT AUTHORITY"
-        $userName = "Network Service"
-    }
-    else
-    {
-        $split = $config.InstallSettings.WebServer.AppPoolIdentity.split("\")
-        $domain = $split[0]
-        $userName = $split[1]
-    }
-
-    if (Confirm-IsUserMemberOfLocalGroup $groupName $userName)
-    {
-        Write-Message $config "$userName is already a member of $groupName" "White"
-    }
-    else
-    {
-        $group = [ADSI]"WinNT://$env:COMPUTERNAME/$groupName,group"
-        $group.Add("WinNT://$domain/$userName,user")
-        Write-Message $config "$userName added a member of $groupName" "White"
-    }
-}
-
-function Set-FileSystemPermissions([xml]$config, [string]$iisSiteName)
-{
-    $installPath = Join-path $config.InstallSettings.WebServer.SitecoreInstallRoot -ChildPath $config.InstallSettings.WebServer.SitecoreInstallFolder
-
-    # Get app pool from site name
-    $site = Get-Item "IIS:\sites\$iisSiteName" 
-    $appPoolName = $site.applicationPool
-    $pool = Get-Item IIS:\AppPools\$appPoolName
-
-    $identityName = $pool.processModel.userName
-    if ($identityName.Equals("ApplicationPoolIdentity"))
-    {
-        $identityName = "IIS APPPOOL\$appPoolName"
-    }
-
-    # Set ACLs for "Website"
-    $folderPath = Join-Path $installPath -ChildPath "Website"
-    Set-AclForFolder $identityName "Modify" $folderPath
-    Set-AclForFolder "IUSR" "Read" $folderPath
-
-    # Set ACLs for "Data"
-    $folderPath = Join-Path $installPath -ChildPath "Data"
-    Set-AclForFolder $identityName "Modify" $folderPath
 }
 
 function Get-FilesToDisableOnCDServer([xml]$config)
@@ -1347,9 +1242,8 @@ function Enable-FilesForCDServer([xml]$config)
             $filename = Split-Path $file -leaf
             if ($filename -eq "SwitchMasterToWeb.config")
             {
-                $filepath = Split-Path $file
-                $foldername = $config.InstallSettings.WebServer.CdServerSettings.LastChildFolderOfIncludeDirectory
-                $filepath = Join-Path $filepath -ChildPath $foldername
+                $foldername = $config.InstallSettings.WebServer.CDServerSettings.LastChildFolderOfIncludeDirectory
+                $filepath = Join-Path (Split-Path $file) -ChildPath $foldername
                 
                 # Create a new folder, this folder should be named so as to be patched last
                 New-Item $filepath -type directory -force | Out-Null
@@ -1365,6 +1259,364 @@ function Enable-FilesForCDServer([xml]$config)
             Write-Message $config "File not found on server: $file" "Yellow" $writeToLogOnly
         }
     }
+}
+
+function Get-FilesToEnableOnPublishingServer([xml]$config)
+{
+    $installPath = Join-path $config.InstallSettings.WebServer.SitecoreInstallRoot -ChildPath $config.InstallSettings.WebServer.SitecoreInstallFolder
+    $webrootPath = Join-Path $installPath -ChildPath "Website"
+
+    $files = @(
+               "App_Config\Include\Sitecore.Publishing.DedicatedInstance.config",
+               "App_Config\Include\Sitecore.Publishing.EventProvider.Async.config",
+               "App_Config\Include\Sitecore.Publishing.Optimizations.config",
+
+               # this file is optionally enabled for Parallel publishing
+               "App_Config\Include\Sitecore.Publishing.Parallel.config"
+               )
+
+    return $files | % { Join-Path $webrootPath -ChildPath $_ }
+}
+
+function Enable-FilesForPublishingServer([xml]$config)
+{
+    Write-Message $config "Enabling files required by a Publishing server." "White"
+    foreach ($file in Get-FilesToEnableOnPublishingServer $config)
+    {
+        $writeToLogOnly = $TRUE
+
+        if (Test-Path $file)
+        {
+            # Do nothing, file is already enabled.
+        }
+        elseif (Test-Path ($file + ".*"))
+        {
+            $match = Get-Item ($file + ".*") | Select-Object -First 1
+
+            $filename = Split-Path $file -leaf
+            if ($filename -eq "Sitecore.Publishing.DedicatedInstance.config")
+            {
+                $foldername = $config.InstallSettings.WebServer.CMServerSettings.LastChildFolderOfIncludeDirectory
+                $filepath = Join-Path (Split-Path $file) -ChildPath $foldername
+                
+                # Create a new folder, this folder should be named so as to be patched last
+                New-Item $filepath -type directory -force | Out-Null
+
+                $file = Join-Path $filepath -ChildPath $filename
+            }
+            elseif ($filename -eq "Sitecore.Publishing.Parallel.config")
+            {
+                if (!(Get-ConfigOption $config "WebServer/CMServerSettings/Publishing/Parallel/enabled" $TRUE))
+                {
+                    continue
+                }
+            }
+
+            Copy-Item -Path $match -Destination $file
+            Write-Message $config "Enabled: $file" "White" $writeToLogOnly
+        }
+        else
+        {
+            Write-Message $config "File not found on server: $file" "Yellow" $writeToLogOnly
+        }        
+    }
+}
+
+function Set-ConfigurationFiles([xml]$config)
+{
+    Write-Message $config "`nWriting changes to config files..." "Green"
+
+    $backupFiles = New-Object 'System.Collections.Generic.List[string]'
+
+    $installPath = Join-path $config.InstallSettings.WebServer.SitecoreInstallRoot -ChildPath $config.InstallSettings.WebServer.SitecoreInstallFolder
+
+    # Edit web.config
+    $webConfigPath = Join-Path $installPath -ChildPath "Website\web.config"
+    $webconfig = [xml](Get-Content $webConfigPath)
+    $currentDate = (Get-Date).ToString("yyyyMMdd_hh-mm-s")
+    $backup = $webConfigPath + "__$currentDate"
+    Write-Message $config "Backing up Web.config" "White"
+    $webconfig.Save($backup)
+    $backupFiles.Add($backup)
+
+    $dataFolderPath = Join-Path $installPath -ChildPath "Data"
+    $webconfig.configuration.SelectSingleNode("sitecore/sc.variable[@name='dataFolder']").SetAttribute("value", $dataFolderPath)
+
+    # Modify sessionState element
+    if ($config.InstallSettings.WebServer.SessionStateProvider.ToLower() -eq "mssql")
+    {
+        $webconfig.configuration.SelectSingleNode("system.web/sessionState").SetAttribute("mode", "Custom")
+        $webconfig.configuration.SelectSingleNode("system.web/sessionState").SetAttribute("customProvider", "mssql")
+        Write-Message $config "Changing session state provider to MSSQL" "White"
+    }
+
+    Write-Message $config "Saving changes to Web.config" "White"
+    $webconfig.Save($webConfigPath)
+
+    # Edit connectionStrings.config
+    $connectionStringsPath = Join-Path $installPath -ChildPath "Website\App_Config\ConnectionStrings.config"
+    $connectionStringsConfig = [xml](Get-Content $connectionStringsPath)
+    $backup = $connectionStringsPath + "__$currentDate"
+    Write-Message $config "Backing up ConnectionStrings.config" "White"
+    $connectionStringsConfig.Save($backup)
+    $backupFiles.Add($backup)
+
+    $baseConnectionString = Get-BaseConnectionString $config
+    foreach ($databaseName in (Get-DatabaseNames $config))
+    {
+        $dbname = $databaseName.ToLower()
+        $fullDatabaseName = (Get-DatabaseNamePrefix $config) + $databaseName
+        $connectionString = $baseConnectionString + $fullDatabaseName + ";"
+
+        $node = $connectionStringsConfig.SelectSingleNode("connectionStrings/add[@name='$dbname']")
+        if ($node -ne $null)
+        {
+            $node.SetAttribute("connectionString", $connectionString);
+        }
+    }
+
+    # Add additional connection strings for each web database copy
+     $dbCopies = $config.InstallSettings.Database.WebDatabaseCopies
+     foreach ($copy in $dbCopies.copy)
+     {
+        $dbElement = $connectionStringsConfig.CreateElement("add")
+
+        $dbAttr = $connectionStringsConfig.CreateAttribute("name")
+        $dbAttr.Value = $copy.Trim()
+        $dbElement.Attributes.Append($dbAttr) | Out-Null
+        
+        $dbAttr = $connectionStringsConfig.CreateAttribute("connectionString")
+        $dbAttr.Value = $baseConnectionString + (Get-DatabaseNamePrefix $config) + $copy.Trim() + ";"
+        $dbElement.Attributes.Append($dbAttr) | Out-Null
+
+        $connectionStringsConfig.DocumentElement.AppendChild($dbElement) | Out-Null
+        Write-Message $config "Addedd a $($copy.Trim()) connection string" "White"
+     }
+
+    # Optionally add a session connection string
+    if ($config.InstallSettings.WebServer.SessionStateProvider.ToLower() -eq "mssql")
+    {
+        $sessionElement = $connectionStringsConfig.CreateElement("add")
+
+        $sessionAttr = $connectionStringsConfig.CreateAttribute("name")
+        $sessionAttr.Value = "session"
+        $sessionElement.Attributes.Append($sessionAttr) | Out-Null
+
+        $sessionAttr = $connectionStringsConfig.CreateAttribute("connectionString")
+        $sessionAttr.Value = $baseConnectionString + (Get-DatabaseNamePrefix $config) + "Sessions;"
+        $sessionElement.Attributes.Append($sessionAttr) | Out-Null
+
+        $connectionStringsConfig.DocumentElement.AppendChild($sessionElement) | Out-Null
+        Write-Message $config "Addedd a session connection string" "White"
+    }
+
+    # Modify Mongo connection strings
+    if (!([string]::IsNullOrEmpty($config.InstallSettings.WebServer.MongoDb.HostName)))
+    {
+        $mongoNodes = $connectionStringsConfig.SelectNodes("connectionStrings/add[contains(@connectionString, 'mongodb://')]")
+        foreach ($node in $mongoNodes)
+        {
+            $url = [System.Uri]($node.connectionString)
+
+            $builder = New-Object System.UriBuilder
+            $builder.Scheme = $url.Scheme
+            $builder.Host = $config.InstallSettings.WebServer.MongoDb.HostName
+            if (!([string]::IsNullOrEmpty($config.InstallSettings.WebServer.MongoDb.Port)))
+            {
+                $builder.Port = $config.InstallSettings.WebServer.MongoDb.Port
+            }
+            $builder.Path = $url.AbsolutePath
+
+            $node.SetAttribute("connectionString", $builder.ToString())
+        }
+
+        Write-Message $config "Changing host name for MongoDb connection strings" "White"
+    }
+
+    # Comment out connection strings not needed by CD server
+    if (Get-ConfigOption $config "WebServer/CDServerSettings/enabled" $TRUE -and Get-ConfigOption $config "WebServer/CDServerSettings/DeactivateConnectionStrings")
+    {
+        $node = $connectionStringsConfig.SelectSingleNode("connectionStrings/add[@name='master']")
+        $node.ParentNode.InnerXml = $node.ParentNode.InnerXml.Replace($node.OuterXml, $node.OuterXml.Insert(0, "<!--").Insert($node.OuterXml.Length+4, "-->"))
+
+        $node = $connectionStringsConfig.SelectSingleNode("connectionStrings/add[@name='tracking.history']")
+        $node.ParentNode.InnerXml = $node.ParentNode.InnerXml.Replace($node.OuterXml, $node.OuterXml.Insert(0, "<!--").Insert($node.OuterXml.Length+4, "-->"))
+
+        $node = $connectionStringsConfig.SelectSingleNode("connectionStrings/add[@name='reporting']")
+        $node.ParentNode.InnerXml = $node.ParentNode.InnerXml.Replace($node.OuterXml, $node.OuterXml.Insert(0, "<!--").Insert($node.OuterXml.Length+4, "-->"))
+
+        Write-Message $config "Commenting out connection strings not need on CD server" "White"
+    }
+
+    Write-Message $config "Saving ConnectionStrings.config" "White"
+    $connectionStringsConfig.Save($connectionStringsPath)
+
+    # Edit Sitecore.ContentSearch.Solr.DefaultIndexConfiguration.config.example
+    if (!([string]::IsNullOrEmpty($config.InstallSettings.WebServer.Solr.ServiceBaseAddress)))
+    {
+        $solrConfigPath = Join-Path $installPath -ChildPath "Website\App_Config\Include\Sitecore.ContentSearch.Solr.DefaultIndexConfiguration.config.example"
+        $solrConfig = [xml](Get-Content $solrConfigPath)
+        $currentDate = (Get-Date).ToString("yyyyMMdd_hh-mm-s")
+        $backup = $solrConfigPath + "__$currentDate"
+        Write-Message $config "Backing up Sitecore.ContentSearch.Solr.DefaultIndexConfiguration.config.example" "White"
+        $solrConfig.Save($backup)
+        $backupFiles.Add($backup)
+
+        $solrConfig.configuration.SelectSingleNode("sitecore/settings/setting[@name='ContentSearch.Solr.ServiceBaseAddress']").SetAttribute("value", $config.InstallSettings.WebServer.Solr.ServiceBaseAddress)
+        Write-Message $config "Changing Solr ServiceBaseAddress" "White"
+
+        Write-Message $config "Saving Sitecore.ContentSearch.Solr.DefaultIndexConfiguration.config.example" "White"
+        $solrConfig.Save($solrConfigPath)
+    }
+
+    if ((Get-ConfigOption $config "WebServer/CDServerSettings/enabled" $TRUE) -and (Get-ConfigOption $config "WebServer/CDServerSettings/ConfigureFilesForCD"))
+    {
+        Disable-FilesForCDServer $config
+        Enable-FilesForCDServer $config
+    }
+
+    if (Get-ConfigOption $config "WebServer/CMServerSettings/enabled" $TRUE)
+    {
+        $scalabilityConfigPath = Join-Path $installPath -ChildPath "Website\App_Config\Include\ScalabilitySettings.config"
+        if (Test-Path $scalabilityConfigPath)
+        {
+            # Do nothing, file is already enabled.
+        }
+        elseif (Test-Path ($scalabilityConfigPath + ".*"))
+        {
+            # Enable the file
+            $match = Get-Item ($scalabilityConfigPath + ".*") | Select-Object -First 1
+
+            Copy-Item -Path $match -Destination $scalabilityConfigPath
+            Write-Message $config "Enabled: $scalabilityConfigPath" "White"
+        }
+
+        # Edit ScalabilitySettings.config
+        $scalabilityConfigPath = Join-Path $installPath -ChildPath "Website\App_Config\Include\ScalabilitySettings.config"
+        $scalabilityConfig = [xml](Get-Content $scalabilityConfigPath)
+        $currentDate = (Get-Date).ToString("yyyyMMdd_hh-mm-s")
+        $backup = $scalabilityConfigPath + "__$currentDate"
+        Write-Message $config "Backing up ScalabilitySettings.config" "White"
+        $scalabilityConfig.Save($backup)
+        $backupFiles.Add($backup)
+        $instanceName = $config.InstallSettings.WebServer.CMServerSettings.InstanceName
+        $scalabilityConfig.configuration.SelectSingleNode("sitecore/settings/setting[@name='InstanceName']").ChildNodes[0].InnerText = $instanceName
+        Write-Message $config "Saving changes to ScalabilitySettings.config" "White"
+        $scalabilityConfig.Save($scalabilityConfigPath)
+
+        if (Test-PublishingServerRole $config)
+        {
+            Enable-FilesForPublishingServer $config
+
+            # Edit ScalabilitySettings.config
+            $publishingInstanceName = $config.InstallSettings.WebServer.CMServerSettings.Publishing.PublishingInstance
+            $scalabilityConfig.configuration.SelectSingleNode("sitecore/settings/setting[@name='Publishing.PublishingInstance']").ChildNodes[0].InnerText = $publishingInstanceName
+            Write-Message $config "Saving changes to ScalabilitySettings.config" "White"
+            $scalabilityConfig.Save($scalabilityConfigPath)
+
+            if (Get-ConfigOption $config "WebServer/CMServerSettings/Publishing/Parallel/enabled" $TRUE)
+            {
+                # Edit Sitecore.Publishing.Parallel.config
+                $parallelConfigPath = Join-Path $installPath -ChildPath "Website\App_Config\Include\Sitecore.Publishing.Parallel.config"
+                $parallelConfig = [xml](Get-Content $parallelConfigPath)
+                $currentDate = (Get-Date).ToString("yyyyMMdd_hh-mm-s")
+                $backup = $parallelConfigPath + "__$currentDate"
+                Write-Message $config "Backing up Sitecore.Publishing.Parallel.config" "White"
+                $parallelConfig.Save($backup)
+                $backupFiles.Add($backup)
+                $maxDegrees = $config.InstallSettings.WebServer.CMServerSettings.Publishing.Parallel.MaxDegreesOfParallelism
+                $parallelConfig.configuration.SelectSingleNode("sitecore/settings/setting[@name='Publishing.MaxDegreeOfParallelism']").ChildNodes[0].InnerText = $maxDegrees
+                Write-Message $config "Saving changes to Sitecore.Publishing.Parallel.config" "White"
+                $parallelConfig.Save($parallelConfigPath)
+            }
+        }
+    }
+
+    Write-Message $config "Modifying config files complete!" "White"
+    return $backupFiles
+}
+
+function Set-AclForFolder([string]$userName, [string]$permission, [string]$folderPath)
+{
+    $acl = Get-Acl $folderPath
+    $rule = New-Object System.Security.AccessControl.FileSystemAccessRule($userName, $permission, "ContainerInherit,ObjectInherit", "None", "Allow")
+    $acl.SetAccessRule($rule)
+    Set-Acl $folderPath $acl
+    Write-Message $config "Added $userName to ACL ($permission) for $folderPath" "White"
+}
+
+function Confirm-IsUserMemberOfLocalGroup([string]$groupName, [string]$userName)
+{
+    $group =[ADSI]"WinNT://$env:COMPUTERNAME/$groupName,group" 
+    $members = @($group.psbase.Invoke("Members")) 
+
+    foreach ($member in $members)
+    {
+        $memberName = $member.GetType().InvokeMember("Name", 'GetProperty', $null, $member, $null)
+        if ($memberName -eq $userName)
+        {
+            return $TRUE
+        }
+    }
+
+    return $FALSE
+}
+
+function Add-AppPoolIdentityToLocalGroup([xml]$config, [string]$groupName, [string]$iisSiteName)
+{
+    if ($config.InstallSettings.WebServer.AppPoolIdentity -eq "ApplicationPoolIdentity")
+    {
+        $domain = "IIS APPPOOL"
+        $site = Get-Website -Name $iisSiteName
+        $userName = $site.applicationPool
+    }
+    elseif ($config.InstallSettings.WebServer.AppPoolIdentity -eq "NetworkService")
+    {
+        $domain = "NT AUTHORITY"
+        $userName = "Network Service"
+    }
+    else
+    {
+        $split = $config.InstallSettings.WebServer.AppPoolIdentity.split("\")
+        $domain = $split[0]
+        $userName = $split[1]
+    }
+
+    if (Confirm-IsUserMemberOfLocalGroup $groupName $userName)
+    {
+        Write-Message $config "$userName is already a member of $groupName" "White"
+    }
+    else
+    {
+        $group = [ADSI]"WinNT://$env:COMPUTERNAME/$groupName,group"
+        $group.Add("WinNT://$domain/$userName,user")
+        Write-Message $config "$userName added a member of $groupName" "White"
+    }
+}
+
+function Set-FileSystemPermissions([xml]$config, [string]$iisSiteName)
+{
+    $installPath = Join-path $config.InstallSettings.WebServer.SitecoreInstallRoot -ChildPath $config.InstallSettings.WebServer.SitecoreInstallFolder
+
+    # Get app pool from site name
+    $site = Get-Item "IIS:\sites\$iisSiteName" 
+    $appPoolName = $site.applicationPool
+    $pool = Get-Item IIS:\AppPools\$appPoolName
+
+    $identityName = $pool.processModel.userName
+    if ($identityName.Equals("ApplicationPoolIdentity"))
+    {
+        $identityName = "IIS APPPOOL\$appPoolName"
+    }
+
+    # Set ACLs for "Website"
+    $folderPath = Join-Path $installPath -ChildPath "Website"
+    Set-AclForFolder $identityName "Modify" $folderPath
+    Set-AclForFolder "IUSR" "Read" $folderPath
+
+    # Set ACLs for "Data"
+    $folderPath = Join-Path $installPath -ChildPath "Data"
+    Set-AclForFolder $identityName "Modify" $folderPath
 }
 
 function Block-AnonymousUsers([xml]$config, [string]$iisSiteName)
@@ -1389,33 +1641,30 @@ function Revoke-ExecutePermission([xml]$config, [string]$iisSiteName)
 function Apply-SecuritySettings([xml]$config, [string]$iisSiteName)
 {
     Write-Message $config "`nApplying recommended security settings..." "Green"
-    
+
     Set-FileSystemPermissions $config $iisSiteName
 
     Add-AppPoolIdentityToLocalGroup $config "IIS_IUSRS" $iisSiteName
     Add-AppPoolIdentityToLocalGroup $config "Performance Monitor Users" $iisSiteName
 
-    if (Get-ConfigOption $config "WebServer/CDServerSettings/ApplyIPWhitelist")
+    if (Get-ConfigOption $config "WebServer/CDServerSettings/enabled" $TRUE)
     {
-        Set-IpRestrictions $config $iisSiteName
-    }
+        if (Get-ConfigOption $config "WebServer/CDServerSettings/ApplyIPWhitelist")
+        {
+            Set-IpRestrictions $config $iisSiteName
+        }
 
-    if (Get-ConfigOption $config "WebServer/CDServerSettings/ConfigureFilesForCD")
-    {
-        Disable-FilesForCDServer $config
-        Enable-FilesForCDServer $config
-    }
+        if (Get-ConfigOption $config "WebServer/CDServerSettings/PreventAnonymousAccess")
+        {
+            Block-AnonymousUsers $config $iisSiteName
+        }
 
-    if (Get-ConfigOption $config "WebServer/CDServerSettings/PreventAnonymousAccess")
-    {
-        Block-AnonymousUsers $config $iisSiteName
+        if (Get-ConfigOption $config "WebServer/CDServerSettings/DenyExecutePermission")
+        {
+            Revoke-ExecutePermission $config $iisSiteName
+        }
     }
-
-    if (Get-ConfigOption $config "WebServer/CDServerSettings/DenyExecutePermission")
-    {
-        Revoke-ExecutePermission $config $iisSiteName
-    }
-
+    
     Write-Message $config "Security settings complete!" "White"
 }
 
