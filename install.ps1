@@ -939,7 +939,6 @@ function Initialize-SitecoreDatabases([xml]$config)
 
     foreach ($webDbName in $webDatabaseNames)
     {
-        Write-Host $webDbName -ForegroundColor Yellow
         Set-DatabaseGrowth $config $webDbName $sqlServerSmo
     }
 
@@ -961,6 +960,10 @@ function Set-ApplicationPoolIdentity([xml]$config, $pool)
     $pool | Set-Item
 
     $identityName = $pool.processModel.userName
+    if ($pool.processModel.identityType.Equals("ApplicationPoolIdentity"))
+    {
+        $identityName = "IIS APPPOOL\$appPoolName"
+    }
 
     Write-Message $config "Identity of application pool is $identityName" "White"
 }
@@ -1567,7 +1570,7 @@ function Add-AppPoolIdentityToLocalGroup([xml]$config, [string]$groupName, [stri
     if ($config.InstallSettings.WebServer.AppPoolIdentity -eq "ApplicationPoolIdentity")
     {
         $domain = "IIS APPPOOL"
-        $site = Get-Website -Name $iisSiteName
+        $site = Get-Item "IIS:\sites\$iisSiteName"
         $userName = $site.applicationPool
     }
     elseif ($config.InstallSettings.WebServer.AppPoolIdentity -eq "NetworkService")
@@ -1604,7 +1607,7 @@ function Set-FileSystemPermissions([xml]$config, [string]$iisSiteName)
     $pool = Get-Item IIS:\AppPools\$appPoolName
 
     $identityName = $pool.processModel.userName
-    if ($identityName.Equals("ApplicationPoolIdentity"))
+    if ($pool.processModel.identityType.Equals("ApplicationPoolIdentity"))
     {
         $identityName = "IIS APPPOOL\$appPoolName"
     }
