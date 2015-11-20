@@ -471,7 +471,7 @@ function Confirm-ConfigurationSettings([xml]$config)
         }
     }
 
-    if ($config.InstallSettings.WebServer.IISBindings.Binding.Count -lt 1)
+    if ($config.InstallSettings.WebServer.IISBindings.ChildNodes.Count -lt 1)
     {
         Write-Host "IISBindings should provide at least one Binding." -ForegroundColor red
         return $FALSE
