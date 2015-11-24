@@ -1061,6 +1061,13 @@ function Initialize-WebSite([xml]$config)
 
             if ($binding.HostHeader.Length -ne 0)
             {
+                if ($bindingIndex -eq 1)
+                {
+                    Add-Content $hostsPath "`n########################"
+                    Add-Content $hostsPath "# $siteName"
+                    Add-Content $hostsPath "########################"
+                }
+
                 # Add hostname to hosts file
                 Write-Message $config "Add $($binding.HostHeader) to hosts file" "White"
                 $hostsPath = "$env:windir\System32\drivers\etc\hosts"
