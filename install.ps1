@@ -373,6 +373,70 @@ function Test-PublishingServerRole([xml]$config)
     return $FALSE
 }
 
+function Find-FolderInZipFile($items, [string]$folderName)
+{
+    foreach($item in $items)
+    {
+        if ($item.GetFolder -ne $Null)
+        {
+            Find-FolderInZipFile $item.GetFolder.items() $folderName
+        }
+        if ($item.name -Like $folderName)
+        {
+            return $item
+        } 
+    } 
+}
+
+function Get-SitecoreVersion([xml]$config, [bool]$getFromZip=$FALSE, [bool]$getFullVersion=$FALSE)
+{
+    # Returns the version of the Sitecore.Kernel.dll
+    $installPath = Join-path $config.InstallSettings.WebServer.SitecoreInstallRoot -ChildPath $config.InstallSettings.WebServer.SitecoreInstallFolder
+    $webrootPath = Join-Path $installPath -ChildPath "Website"
+    $kernelPath = Join-Path $webrootPath -ChildPath "bin\Sitecore.Kernel.dll"
+
+    if ($getFromZip)
+    {
+        $zipPath = $config.InstallSettings.SitecoreZipPath
+        $shell = New-Object -com shell.application
+        $item = Find-FolderInZipFile $shell.NameSpace($zipPath).Items() "bin"
+        $kernelItem = $shell.NameSpace($item.Path).Items() | Where {$_.Name -match "Sitecore.Kernel.dll"}
+        $shell.NameSpace($installPath).CopyHere($kernelItem)
+        $path = Join-Path $installPath -ChildPath $kernelItem.Name
+        $fullVersion = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($path).FileVersion
+        Remove-Item $path
+    }
+    else
+    {
+        $fullVersion = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($kernelPath).FileVersion
+    }
+
+    $versionInfo = $fullVersion
+    if (!$getFullVersion)
+    {
+        $verArr = $fullVersion.Split("{.}")
+        $versionInfo = "{0}.{1}" -f $verArr[0],$verArr[1]
+    }
+
+    return $versionInfo
+}
+
+function Test-SupportedSitecoreVersion([xml]$config)
+{
+    $versionToInstall = Get-SitecoreVersion $config $true
+
+    if ($versionToInstall -eq "8.0")
+    {
+        return $TRUE
+    }
+    elseif ($versionToInstall -eq "8.1")
+    {
+        return $TRUE
+    }
+
+    return $FALSE
+}
+
 function Confirm-ConfigurationSettings([xml]$config)
 {
     if ([string]::IsNullOrEmpty($config.InstallSettings.SitecoreZipPath))
@@ -385,6 +449,12 @@ function Confirm-ConfigurationSettings([xml]$config)
         if (!(Test-Path $config.InstallSettings.SitecoreZipPath))
         {
             Write-Host "Couldn't find a file specified by SitecoreZipPath" -ForegroundColor Red
+            return $FALSE
+        }
+
+        if (!(Test-SupportedSitecoreVersion $config))
+        {
+            Write-Host "The version of Sitecore you are attempting to install is not supported." -ForegroundColor Red
             return $FALSE
         }
     }
@@ -644,21 +714,6 @@ function Confirm-ConfigurationSettings([xml]$config)
     }
 
     return $TRUE
-}
-
-function Find-FolderInZipFile($items, [string]$folderName)
-{
-    foreach($item in $items)
-    {
-        if ($item.GetFolder -ne $Null)
-        {
-            Find-FolderInZipFile $item.GetFolder.items() $folderName
-        }
-        if ($item.name -Like $folderName)
-        {
-            return $item
-        } 
-    } 
 }
 
 function Get-SubstituteDatabaseFileName($currentFileName, $dbName)
@@ -1061,6 +1116,8 @@ function Initialize-WebSite([xml]$config)
 
             if ($binding.HostHeader.Length -ne 0)
             {
+                # Add hostname(s) to hosts file
+                $hostsPath = "$env:windir\System32\drivers\etc\hosts"
                 if ($bindingIndex -eq 1)
                 {
                     Add-Content $hostsPath "`n########################"
@@ -1068,9 +1125,7 @@ function Initialize-WebSite([xml]$config)
                     Add-Content $hostsPath "########################"
                 }
 
-                # Add hostname to hosts file
                 Write-Message $config "Add $($binding.HostHeader) to hosts file" "White"
-                $hostsPath = "$env:windir\System32\drivers\etc\hosts"
                 $ip = $binding.IP
                 if ($ip -eq "*")
                 {
@@ -1120,79 +1175,171 @@ function Get-FilesToDisableOnCDServer([xml]$config)
     $installPath = Join-path $config.InstallSettings.WebServer.SitecoreInstallRoot -ChildPath $config.InstallSettings.WebServer.SitecoreInstallFolder
     $webrootPath = Join-Path $installPath -ChildPath "Website"
 
-    $files = @(
-               # Marketing Platform
-               "App_Config\Include\Sitecore.Analytics.Automation.TimeoutProcessing.config",
-               "App_Config\Include\Sitecore.Analytics.Processing.Aggregation.Services.config",
-               "App_Config\Include\Sitecore.Analytics.Processing.Services.config",
-               "App_Config\Include\Sitecore.Analytics.Reporting.config",
-               "App_Config\Include\Sitecore.Marketing.Client.config",
-               "App_Config\Include\Sitecore.Processing.config",
-               "App_Config\Include\Sitecore.WebDAV.config",
+    $filesFor80 = @(
+                   # Marketing Platform
+                   "App_Config\Include\Sitecore.Analytics.Automation.TimeoutProcessing.config",
+                   "App_Config\Include\Sitecore.Analytics.Processing.Aggregation.Services.config",
+                   "App_Config\Include\Sitecore.Analytics.Processing.Services.config",
+                   "App_Config\Include\Sitecore.Analytics.Reporting.config",
+                   "App_Config\Include\Sitecore.Marketing.Client.config",
+                   "App_Config\Include\Sitecore.Processing.config",
+                   "App_Config\Include\Sitecore.WebDAV.config",
 
-               # Path Analyzer
-               "App_Config\Include\Sitecore.PathAnalyzer.Client.config",
-               "App_Config\Include\Sitecore.PathAnalyzer.config",
-               "App_Config\Include\Sitecore.PathAnalyzer.Processing.config",
-               "App_Config\Include\Sitecore.PathAnalyzer.Services.config",
-               "App_Config\Include\Sitecore.PathAnalyzer.StorageProviders.config",
-               "bin\Sitecore.PathAnalyzer.dll",
-               "bin\Sitecore.PathAnalyzer.Client.dll",
-               "bin\Sitecore.PathAnalyzer.Services.dll",
-               "bin\Sitecore.SequenceAnalyzer.dll",
+                   # Path Analyzer
+                   "App_Config\Include\Sitecore.PathAnalyzer.Client.config",
+                   "App_Config\Include\Sitecore.PathAnalyzer.config",
+                   "App_Config\Include\Sitecore.PathAnalyzer.Processing.config",
+                   "App_Config\Include\Sitecore.PathAnalyzer.Services.config",
+                   "App_Config\Include\Sitecore.PathAnalyzer.StorageProviders.config",
+                   "bin\Sitecore.PathAnalyzer.dll",
+                   "bin\Sitecore.PathAnalyzer.Client.dll",
+                   "bin\Sitecore.PathAnalyzer.Services.dll",
+                   "bin\Sitecore.SequenceAnalyzer.dll",
 
-               # Content Testing
-               "App_Config\Include\ContentTesting\Sitecore.ContentTesting.Processing.Aggregation.config",
+                   # Content Testing
+                   "App_Config\Include\ContentTesting\Sitecore.ContentTesting.Processing.Aggregation.config",
 
-               # Experience Analytics
-               "App_Config\Include\ExperienceAnalytics\Sitecore.ExperienceAnalytics.Aggregation.config",
-               #"App_Config\Include\ExperienceAnalytics\Sitecore.ExperienceAnalytics.Client.config", # this appears to be a mistake in the documentation, does not ship with vanilla install
-               "App_Config\Include\ExperienceAnalytics\Sitecore.ExperienceAnalytics.Reduce.config",
-               "App_Config\Include\ExperienceAnalytics\Sitecore.ExperienceAnalytics.StorageProviders.config",
-               "App_Config\Include\ExperienceAnalytics\Sitecore.ExperienceAnalytics.WebAPI.config",
-               #"bin\ExperienceAnalytics\Sitecore.ExperienceAnalytics.Client.dll", # this appears to be a mistake in the documentation, does not ship with vanilla install
+                   # Experience Analytics
+                   "App_Config\Include\ExperienceAnalytics\Sitecore.ExperienceAnalytics.Aggregation.config",
+                   "App_Config\Include\ExperienceAnalytics\Sitecore.ExperienceAnalytics.Client.config",
+                   "App_Config\Include\ExperienceAnalytics\Sitecore.ExperienceAnalytics.Reduce.config",
+                   "App_Config\Include\ExperienceAnalytics\Sitecore.ExperienceAnalytics.StorageProviders.config",
+                   "App_Config\Include\ExperienceAnalytics\Sitecore.ExperienceAnalytics.WebAPI.config",
+                   "bin\ExperienceAnalytics\Sitecore.ExperienceAnalytics.Client.dll",
                
-               # Experience Profile
-               "App_Config\Include\ExperienceProfile\Sitecore.ExperienceProfile.config",
-               "App_Config\Include\ExperienceProfile\Sitecore.ExperienceProfile.Client.config",
-               "App_Config\Include\ExperienceProfile\Sitecore.ExperienceProfile.Reporting.config",
+                   # Experience Profile
+                   "App_Config\Include\ExperienceProfile\Sitecore.ExperienceProfile.config",
+                   "App_Config\Include\ExperienceProfile\Sitecore.ExperienceProfile.Client.config",
+                   "App_Config\Include\ExperienceProfile\Sitecore.ExperienceProfile.Reporting.config",
 
-               # Federated Experience Manager
-               "App_Config\Include\FXM\Sitecore.FXM.Speak.config",
-               #"App_Config\Include\FXM\Sitecore.Services.Client.FXM.Enabler.config", # this appears to be a mistake in the documentation, does not ship with vanilla install
+                   # Federated Experience Manager
+                   "App_Config\Include\FXM\Sitecore.FXM.Speak.config",
+                   #"App_Config\Include\FXM\Sitecore.Services.Client.FXM.Enabler.config", # this appears to be a mistake in the documentation, does not ship with vanilla install
 
-               # List Management
-               "App_Config\Include\ListManagement\Sitecore.ListManagement.Client.config",
-               "App_Config\Include\ListManagement\Sitecore.ListManagement.config",
-               "App_Config\Include\ListManagement\Sitecore.ListManagement.Services.config",
+                   # List Management
+                   "App_Config\Include\ListManagement\Sitecore.ListManagement.Client.config",
+                   "App_Config\Include\ListManagement\Sitecore.ListManagement.config",
+                   "App_Config\Include\ListManagement\Sitecore.ListManagement.Services.config",
 
-               # Social Connected
-               "App_Config\Include\Social\Sitecore.Social.ExperienceProfile.config",
+                   # Social Connected
+                   "App_Config\Include\Social\Sitecore.Social.ExperienceProfile.config",
 
-               # Lucene
-               "App_Config\Include\Sitecore.ContentSearch.Lucene.Index.Master.config",
-               "App_Config\Include\Sitecore.ContentSearch.Solr.DefaultIndexConfiguration.config",
-               "App_Config\Include\Sitecore.ContentSearch.Solr.Index.Analytics.config",
-               "App_Config\Include\Sitecore.ContentSearch.Solr.Index.Core.config",
-               "App_Config\Include\Sitecore.ContentSearch.Solr.Index.Master.config",
-               "App_Config\Include\Sitecore.ContentSearch.Solr.Index.Web.config",
-               "App_Config\Include\Sitecore.Marketing.Definitions.MarketingAssets.Repositories.Lucene.Index.Master.config",
-               "App_Config\Include\Sitecore.Marketing.Definitions.MarketingAssets.Repositories.Solr.Index.Master.config",
-               "App_Config\Include\Sitecore.Marketing.Definitions.MarketingAssets.Repositories.Solr.Index.Web.config",
-               "App_Config\Include\Sitecore.Marketing.Definitions.MarketingAssets.Repositories.Solr.IndexConfiguration.config",
-               "App_Config\Include\ContentTesting\Sitecore.ContentTesting.Solr.IndexConfiguration.config",
-               "App_Config\Include\FXM\Sitecore.FXM.Solr.Index.DomainsSearch.config",
-               "App_Config\Include\ListManagement\Sitecore.ListManagement.Lucene.Index.List.config",
-               "App_Config\Include\ListManagement\Sitecore.ListManagement.Lucene.IndexConfiguration.config",
-               "App_Config\Include\ListManagement\Sitecore.ListManagement.Solr.Index.List.config",
-               "App_Config\Include\ListManagement\Sitecore.ListManagement.Solr.IndexConfiguration.config",
-               "App_Config\Include\Social\Sitecore.Social.Lucene.Index.Master.config",
-               "App_Config\Include\Social\Sitecore.Social.Solr.Index.Master.config",
-               "App_Config\Include\Social\Sitecore.Social.Solr.Index.Web.config",
-               "App_Config\Include\Social\Sitecore.Social.Solr.IndexConfiguration.config"
-               )
+                   # Search-related configs, using Lucene as provider
+                   "App_Config\Include\Sitecore.ContentSearch.Lucene.Index.Master.config",
+                   "App_Config\Include\Sitecore.ContentSearch.Solr.DefaultIndexConfiguration.config",
+                   "App_Config\Include\Sitecore.ContentSearch.Solr.Index.Analytics.config",
+                   "App_Config\Include\Sitecore.ContentSearch.Solr.Index.Core.config",
+                   "App_Config\Include\Sitecore.ContentSearch.Solr.Index.Master.config",
+                   "App_Config\Include\Sitecore.ContentSearch.Solr.Index.Web.config",
+                   "App_Config\Include\Sitecore.Marketing.Definitions.MarketingAssets.Repositories.Lucene.Index.Master.config",
+                   "App_Config\Include\Sitecore.Marketing.Definitions.MarketingAssets.Repositories.Solr.Index.Master.config",
+                   "App_Config\Include\Sitecore.Marketing.Definitions.MarketingAssets.Repositories.Solr.Index.Web.config",
+                   "App_Config\Include\Sitecore.Marketing.Definitions.MarketingAssets.Repositories.Solr.IndexConfiguration.config",
+                   "App_Config\Include\ContentTesting\Sitecore.ContentTesting.Lucene.IndexConfiguration.config",
+                   "App_Config\Include\ContentTesting\Sitecore.ContentTesting.Solr.IndexConfiguration.config",
+                   "App_Config\Include\FXM\Sitecore.FXM.Solr.Index.DomainsSearch.config",
+                   "App_Config\Include\ListManagement\Sitecore.ListManagement.Lucene.Index.List.config",
+                   "App_Config\Include\ListManagement\Sitecore.ListManagement.Lucene.IndexConfiguration.config",
+                   "App_Config\Include\ListManagement\Sitecore.ListManagement.Solr.Index.List.config",
+                   "App_Config\Include\ListManagement\Sitecore.ListManagement.Solr.IndexConfiguration.config",
+                   "App_Config\Include\Social\Sitecore.Social.Lucene.Index.Master.config",
+                   "App_Config\Include\Social\Sitecore.Social.Solr.Index.Master.config",
+                   "App_Config\Include\Social\Sitecore.Social.Solr.Index.Web.config",
+                   "App_Config\Include\Social\Sitecore.Social.Solr.IndexConfiguration.config"
+                   )
 
-    return $files | % { Join-Path $webrootPath -ChildPath $_ }
+    $filesFor81 = @(
+                   # Marketing Platform
+                   "App_Config\Include\Sitecore.Analytics.Automation.TimeoutProcessing.config",
+                   "App_Config\Include\Sitecore.Analytics.Processing.Aggregation.config",
+                   "App_Config\Include\Sitecore.Analytics.Processing.Aggregation.Services.config",
+                   "App_Config\Include\Sitecore.Analytics.Processing.config",
+                   "App_Config\Include\Sitecore.Analytics.Processing.Services.config",
+                   "App_Config\Include\Sitecore.Analytics.Reporting.config",
+                   "App_Config\Include\Sitecore.Marketing.Client.config",
+                   "App_Config\Include\Sitecore.Processing.config",
+                   "App_Config\Include\Sitecore.Shell.MarketingAutomation.config",
+                   "App_Config\Include\Sitecore.WebDAV.config",
+
+                   # Path Analyzer
+                   "App_Config\Include\Sitecore.PathAnalyzer.Client.config",
+                   "App_Config\Include\Sitecore.PathAnalyzer.config",
+                   "App_Config\Include\Sitecore.PathAnalyzer.Processing.config",
+                   "App_Config\Include\Sitecore.PathAnalyzer.Services.config",
+                   "App_Config\Include\Sitecore.PathAnalyzer.StorageProviders.config",
+ 
+                   # Content Testing
+                   "App_Config\Include\ContentTesting\Sitecore.ContentTesting.Processing.Aggregation.config",
+
+                   # Experience Analytics
+                   "App_Config\Include\ExperienceAnalytics\Sitecore.ExperienceAnalytics.Aggregation.config",
+                   "App_Config\Include\ExperienceAnalytics\Sitecore.ExperienceAnalytics.Client.config",
+                   "App_Config\Include\ExperienceAnalytics\Sitecore.ExperienceAnalytics.Reduce.config",
+                   "App_Config\Include\ExperienceAnalytics\Sitecore.ExperienceAnalytics.StorageProviders.config",
+                   "App_Config\Include\ExperienceAnalytics\Sitecore.ExperienceAnalytics.WebAPI.config",
+
+                   # Experience Profile
+                   "App_Config\Include\ExperienceProfile\Sitecore.ExperienceProfile.config",
+                   "App_Config\Include\ExperienceProfile\Sitecore.ExperienceProfile.Client.config",
+                   "App_Config\Include\ExperienceProfile\Sitecore.ExperienceProfile.Reporting.config",
+
+                   # Federated Experience Manager
+                   "App_Config\Include\FXM\Sitecore.FXM.Speak.config",
+
+                   # List Management
+                   "App_Config\Include\ListManagement\Sitecore.ListManagement.Client.config",
+                   "App_Config\Include\ListManagement\Sitecore.ListManagement.config",
+                   "App_Config\Include\ListManagement\Sitecore.ListManagement.Services.config",
+
+                   # Social Connected
+                   "App_Config\Include\Social\Sitecore.Social.ExperienceProfile.config",
+
+                   # Search-related configs, using Lucene as provider
+                   "App_Config\Include\Sitecore.ContentSearch.Lucene.Index.Master.config",
+                   "App_Config\Include\Sitecore.ContentSearch.Solr.DefaultIndexConfiguration.config",
+                   "App_Config\Include\Sitecore.ContentSearch.Solr.Index.Analytics.config",
+                   "App_Config\Include\Sitecore.ContentSearch.Solr.Index.Core.config",
+                   "App_Config\Include\Sitecore.ContentSearch.Solr.Index.Master.config",
+                   "App_Config\Include\Sitecore.ContentSearch.Solr.Index.Web.config",
+                   "App_Config\Include\Sitecore.Marketing.Definitions.MarketingAssets.Repositories.Lucene.Index.Master.config",
+                   "App_Config\Include\Sitecore.Marketing.Definitions.MarketingAssets.Repositories.Solr.Index.Master.config",
+                   "App_Config\Include\Sitecore.Marketing.Definitions.MarketingAssets.Repositories.Solr.Index.Web.config",
+                   "App_Config\Include\Sitecore.Marketing.Definitions.MarketingAssets.Repositories.Solr.IndexConfiguration.config",
+                   "App_Config\Include\Sitecore.Marketing.Lucene.Index.Master.config",
+                   "App_Config\Include\Sitecore.Marketing.Solr.Index.Master.config",
+                   "App_Config\Include\Sitecore.Marketing.Solr.Index.Web.config",
+                   "App_Config\Include\Sitecore.Marketing.Solr.IndexConfiguration.config",
+                   "App_Config\Include\ContentTesting\Sitecore.ContentTesting.Lucene.IndexConfiguration.config",
+                   "App_Config\Include\ContentTesting\Sitecore.ContentTesting.Solr.IndexConfiguration.config",
+                   "App_Config\Include\FXM\Sitecore.FXM.Lucene.DomainsSearch.DefaultIndexConfiguration.config",
+                   "App_Config\Include\FXMSitecore.FXM.Lucene.DomainsSearch.Index.Master.config",
+                   "App_Config\Include\FXMSitecore.FXM.Lucene.DomainsSearch.Index.Web.config",
+                   "App_Config\Include\FXMSitecore.FXM.Solr.DomainsSearch.DefaultIndexConfiguration.config",
+                   "App_Config\Include\FXMSitecore.FXM.Solr.DomainsSearch.Index.Master.config",
+                   "App_Config\Include\FXMSitecore.FXM.Solr.DomainsSearch.Index.Web.config",
+                   "App_Config\Include\ListManagement\Sitecore.ListManagement.Lucene.Index.List.config",
+                   "App_Config\Include\ListManagement\Sitecore.ListManagement.Lucene.IndexConfiguration.config",
+                   "App_Config\Include\ListManagement\Sitecore.ListManagement.Solr.Index.List.config",
+                   "App_Config\Include\ListManagement\Sitecore.ListManagement.Solr.IndexConfiguration.config",
+                   "App_Config\Include\Social\Sitecore.Social.Lucene.Index.Master.config",
+                   "App_Config\Include\Social\Sitecore.Social.Solr.Index.Master.config",
+                   "App_Config\Include\Social\Sitecore.Social.Solr.Index.Web.config",
+                   "App_Config\Include\Social\Sitecore.Social.Solr.IndexConfiguration.config"
+                   )
+
+    [decimal]$sitecoreVersion = Get-SitecoreVersion $config
+    if ($sitecoreVersion -eq "8.0")
+    {        
+        return $filesFor80 | % { Join-Path $webrootPath -ChildPath $_ }
+    }
+    elseif ($sitecoreVersion -eq "8.1")
+    {
+        return $filesFor81 | % { Join-Path $webrootPath -ChildPath $_ }
+    }
+    else
+    {
+        throw [System.InvalidOperationException] "Sitecore version [$sitecoreVersion] is not supported by this installer."
+    }
 }
 
 function Disable-FilesForCDServer([xml]$config)
@@ -1221,52 +1368,93 @@ function Get-FilesToEnableOnCDServer([xml]$config)
     $installPath = Join-path $config.InstallSettings.WebServer.SitecoreInstallRoot -ChildPath $config.InstallSettings.WebServer.SitecoreInstallFolder
     $webrootPath = Join-Path $installPath -ChildPath "Website"
 
-    $files = @(
-               # Marketing Platform
-               "App_Config\Include\ScalabilitySettings.config",
-               #"App_Config\Include\Sitecore.EngagementAutomation.LiveSessionAgent.Processing.config", # this appears to be a mistake in the documentation, does not ship with vanilla install
-               "App_Config\Include\SwitchMasterToWeb.config",
+    $filesFor80 = @(
+                   # Marketing Platform
+                   "App_Config\Include\ScalabilitySettings.config",
+                   #"App_Config\Include\Sitecore.EngagementAutomation.LiveSessionAgent.Processing.config", # this appears to be a mistake in the documentation, does not ship with vanilla install
+                   "App_Config\Include\SwitchMasterToWeb.config",
 
-               # Experience Analytics
-               "bin\Sitecore.ExperienceAnalytics.dll"
-               )
+                   # Experience Analytics
+                   "bin\Sitecore.ExperienceAnalytics.dll"
+                   )
 
-    return $files | % { Join-Path $webrootPath -ChildPath $_ }
+    $filesFor81 = @(
+                   # Marketing Platform
+                   "App_Config\Include\ScalabilitySettings.config",
+                   "App_Config\Include\Sitecore.Analytics.MarketingTaxonomyCD.config",
+                   "App_Config\Include\Sitecore.Marketing.config",
+                   "App_Config\Include\Sitecore.Marketing.Definitions.MarketingAssets.RepositoriesCD.config",
+                   "App_Config\Include\Sitecore.MarketingCD.config",
+                   "App_Config\Include\Z.SwitchMasterToWeb\SwitchMasterToWeb.config",
+
+                   # Social Connected
+                   "App_Config\Include\SocialSitecore.Social.ScalabilitySettings.config"
+                   )
+
+    [decimal]$sitecoreVersion = Get-SitecoreVersion $config
+    if ($sitecoreVersion -eq "8.0")
+    {        
+        return $filesFor80 | % { Join-Path $webrootPath -ChildPath $_ }
+    }
+    elseif ($sitecoreVersion -eq "8.1")
+    {
+        return $filesFor81 | % { Join-Path $webrootPath -ChildPath $_ }
+    }
+    else
+    {
+        throw [System.InvalidOperationException] "Sitecore version [$sitecoreVersion] is not supported by this installer."
+    }
 }
 
 function Enable-FilesForCDServer([xml]$config)
 {
     Write-Message $config "Enabling files required by a CD server." "White"
-    foreach ($file in Get-FilesToEnableOnCDServer $config)
+    foreach ($fileToEnable in Get-FilesToEnableOnCDServer $config)
     {
         $writeToLogOnly = $TRUE
 
-        if (Test-Path $file)
+        if (Test-Path $fileToEnable)
         {
             # Do nothing, file is already enabled.
         }
-        elseif (Test-Path ($file + ".*"))
+        elseif (Test-Path ($fileToEnable + ".*"))
         {
-            $match = Get-Item ($file + ".*") | Select-Object -First 1
+            $match = Get-Item ($fileToEnable + ".*") | Select-Object -First 1
 
-            $filename = Split-Path $file -leaf
+            $filename = Split-Path $fileToEnable -leaf
             if ($filename -eq "SwitchMasterToWeb.config")
             {
-                $foldername = $config.InstallSettings.WebServer.CDServerSettings.LastChildFolderOfIncludeDirectory
-                $filepath = Join-Path (Split-Path $file) -ChildPath $foldername
+                [decimal]$sitecoreVersion = Get-SitecoreVersion $config
+                if ($sitecoreVersion -eq 8.0)
+                {        
+                    $foldername = $config.InstallSettings.WebServer.CDServerSettings.LastChildFolderOfIncludeDirectory
+                    $folderPath = Join-Path (Split-Path $fileToEnable) -ChildPath $foldername
                 
-                # Create a new folder, this folder should be named so as to be patched last
-                New-Item $filepath -type directory -force | Out-Null
+                    # Create a new folder, this folder should be named so as to be patched last
+                    New-Item $folderPath -type directory -force | Out-Null
 
-                $file = Join-Path $filepath -ChildPath $filename
+                    $fileToEnable = Join-Path $folderPath -ChildPath $filename
+                }
+                elseif ($sitecoreVersion -eq 8.1)
+                {
+                    # Change name of folder to LastChildFolderOfIncludeDirectory
+                    $newFolderName = $config.InstallSettings.WebServer.CDServerSettings.LastChildFolderOfIncludeDirectory
+                    $folderPath = Split-Path $fileToEnable
+                    $folderItem = Rename-Item $folderPath $newFolderName -PassThru
+
+                    $fileToEnable = Join-Path $folderItem.FullName -ChildPath $filename
+
+                    # The matching config file has been moved, must rewrite match path
+                    $match = Join-Path $folderItem.FullName -ChildPath (Split-Path $match -leaf)
+                }
             }
 
-            Copy-Item -Path $match -Destination $file
-            Write-Message $config "Enabled: $file" "White" $writeToLogOnly
+            Copy-Item -Path $match -Destination $fileToEnable
+            Write-Message $config "Enabled: $fileToEnable" "White" $writeToLogOnly
         }
         else
         {
-            Write-Message $config "File not found on server: $file" "Yellow" $writeToLogOnly
+            Write-Message $config "File not found on server: $fileToEnable" "Yellow" $writeToLogOnly
         }
     }
 }
@@ -1336,21 +1524,43 @@ function Set-ConfigurationFiles([xml]$config)
 {
     Write-Message $config "`nWriting changes to config files..." "Green"
 
+    [decimal]$sitecoreVersion = Get-SitecoreVersion $config
     $backupFiles = New-Object 'System.Collections.Generic.List[string]'
-
     $installPath = Join-path $config.InstallSettings.WebServer.SitecoreInstallRoot -ChildPath $config.InstallSettings.WebServer.SitecoreInstallFolder
+    $currentDate = (Get-Date).ToString("yyyyMMdd_hh-mm-s")
 
-    # Edit web.config
+    #region Edit sitecore.config
+    if ($sitecoreVersion -eq 8.1)
+    {
+        $sitecoreConfigPath = Join-Path $installPath -ChildPath "Website\App_Config\sitecore.config"
+        $sitecoreConfig = [xml](Get-Content $sitecoreConfigPath)
+        $backup = $sitecoreConfigPath + "__$currentDate"
+        Write-Message $config "Backing up sitecore.config" "White"
+        $sitecoreConfig.Save($backup)
+        $backupFiles.Add($backup)
+
+        # Set dataFolder path
+        $dataFolderPath = Join-Path $installPath -ChildPath "Data"
+        $sitecoreConfig.SelectSingleNode("sitecore/sc.variable[@name='dataFolder']").SetAttribute("value", $dataFolderPath)
+
+        Write-Message $config "Saving sitecore.config" "White"
+        $sitecoreConfig.Save($sitecoreConfigPath)
+    }
+    #endregion
+
+    #region Edit web.config
     $webConfigPath = Join-Path $installPath -ChildPath "Website\web.config"
     $webconfig = [xml](Get-Content $webConfigPath)
-    $currentDate = (Get-Date).ToString("yyyyMMdd_hh-mm-s")
     $backup = $webConfigPath + "__$currentDate"
     Write-Message $config "Backing up Web.config" "White"
     $webconfig.Save($backup)
     $backupFiles.Add($backup)
 
-    $dataFolderPath = Join-Path $installPath -ChildPath "Data"
-    $webconfig.configuration.SelectSingleNode("sitecore/sc.variable[@name='dataFolder']").SetAttribute("value", $dataFolderPath)
+    if ($sitecoreVersion -eq 8.0)
+    {
+        $dataFolderPath = Join-Path $installPath -ChildPath "Data"
+        $webconfig.configuration.SelectSingleNode("sitecore/sc.variable[@name='dataFolder']").SetAttribute("value", $dataFolderPath)
+    }
 
     # Modify sessionState element
     if ($config.InstallSettings.WebServer.SessionStateProvider.ToLower() -eq "mssql")
@@ -1362,8 +1572,9 @@ function Set-ConfigurationFiles([xml]$config)
 
     Write-Message $config "Saving changes to Web.config" "White"
     $webconfig.Save($webConfigPath)
+    #endregion
 
-    # Edit connectionStrings.config
+    #region Edit connectionStrings.config
     $connectionStringsPath = Join-Path $installPath -ChildPath "Website\App_Config\ConnectionStrings.config"
     $connectionStringsConfig = [xml](Get-Content $connectionStringsPath)
     $backup = $connectionStringsPath + "__$currentDate"
@@ -1460,8 +1671,9 @@ function Set-ConfigurationFiles([xml]$config)
 
     Write-Message $config "Saving ConnectionStrings.config" "White"
     $connectionStringsConfig.Save($connectionStringsPath)
+    #endregion
 
-    # Edit Sitecore.ContentSearch.Solr.DefaultIndexConfiguration.config.example
+    #region Edit Sitecore.ContentSearch.Solr.DefaultIndexConfiguration.config.example
     if (!([string]::IsNullOrEmpty($config.InstallSettings.WebServer.Solr.ServiceBaseAddress)))
     {
         $solrConfigPath = Join-Path $installPath -ChildPath "Website\App_Config\Include\Sitecore.ContentSearch.Solr.DefaultIndexConfiguration.config.example"
@@ -1478,7 +1690,9 @@ function Set-ConfigurationFiles([xml]$config)
         Write-Message $config "Saving Sitecore.ContentSearch.Solr.DefaultIndexConfiguration.config.example" "White"
         $solrConfig.Save($solrConfigPath)
     }
+    #endregion
 
+    #region Configure CM/CD/PublishingServer roles
     if ((Get-ConfigOption $config "WebServer/CDServerSettings/enabled" $TRUE) -and (Get-ConfigOption $config "WebServer/CDServerSettings/ConfigureFilesForCD"))
     {
         Disable-FilesForCDServer $config
@@ -1541,6 +1755,7 @@ function Set-ConfigurationFiles([xml]$config)
             }
         }
     }
+    #endregion
 
     Write-Message $config "Modifying config files complete!" "White"
     return $backupFiles
@@ -1743,8 +1958,8 @@ function Install-SitecoreApplication
     }
 
     $stopWatch = [Diagnostics.Stopwatch]::StartNew()
-    $date = Get-Date
-    $message = "Starting Sitecore install - $date" 
+    $date = Get-Date    
+    $message = "Starting Sitecore install [version $(Get-SitecoreVersion $config $TRUE $TRUE)] - $date" 
     Write-Message $config $message "Green"
 
     try
