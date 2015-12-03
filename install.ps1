@@ -397,6 +397,11 @@ function Get-SitecoreVersion([xml]$config, [bool]$getFromZip=$FALSE, [bool]$getF
 
     if ($getFromZip)
     {
+        if (!(Test-Path $installPath))
+        {
+            New-Item $installPath -type directory -force | Out-Null
+        }
+
         $zipPath = $config.InstallSettings.SitecoreZipPath
         $shell = New-Object -com shell.application
         $item = Find-FolderInZipFile $shell.NameSpace($zipPath).Items() "bin"
