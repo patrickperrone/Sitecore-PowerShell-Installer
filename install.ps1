@@ -1651,7 +1651,12 @@ function Set-ConfigurationFiles([xml]$config)
             {
                 $builder.Port = $config.InstallSettings.WebServer.MongoDb.Port
             }
-            $builder.Path = $url.AbsolutePath
+
+            # Use the same prefix for MongoDB databases as we use for SQL
+            $lastSegment = (Get-DatabaseNamePrefix $config) + $url.Segments[$url.Segments.Count-1]
+            $newSegments = $url.Segments
+            $newSegments[$newSegments.Count-1] = $lastSegment
+            $builder.Path = [string]::Join("",$newSegments)
 
             $node.SetAttribute("connectionString", $builder.ToString())
         }
