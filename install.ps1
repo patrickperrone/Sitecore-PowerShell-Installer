@@ -1180,6 +1180,7 @@ function Get-FilesToDisableOnCDServer([xml]$config)
     $installPath = Join-path $config.InstallSettings.WebServer.SitecoreInstallRoot -ChildPath $config.InstallSettings.WebServer.SitecoreInstallFolder
     $webrootPath = Join-Path $installPath -ChildPath "Website"
 
+    # Based on https://doc.sitecore.net/sitecore_experience_platform/80/xdb_configuration/configure_a_content_delivery_server
     $filesFor80 = @(
                    # Marketing Platform
                    "App_Config\Include\Sitecore.Analytics.Automation.TimeoutProcessing.config",
@@ -1253,6 +1254,7 @@ function Get-FilesToDisableOnCDServer([xml]$config)
                    "App_Config\Include\Social\Sitecore.Social.Solr.IndexConfiguration.config"
                    )
 
+    # Based on https://doc.sitecore.net/sitecore_experience_platform/xdb_configuration/configure_a_content_delivery_server
     $filesFor81 = @(
                    # Marketing Platform
                    "App_Config\Include\Sitecore.Analytics.Automation.TimeoutProcessing.config",
@@ -1317,11 +1319,11 @@ function Get-FilesToDisableOnCDServer([xml]$config)
                    "App_Config\Include\ContentTesting\Sitecore.ContentTesting.Lucene.IndexConfiguration.config",
                    "App_Config\Include\ContentTesting\Sitecore.ContentTesting.Solr.IndexConfiguration.config",
                    "App_Config\Include\FXM\Sitecore.FXM.Lucene.DomainsSearch.DefaultIndexConfiguration.config",
-                   "App_Config\Include\FXMSitecore.FXM.Lucene.DomainsSearch.Index.Master.config",
-                   "App_Config\Include\FXMSitecore.FXM.Lucene.DomainsSearch.Index.Web.config",
-                   "App_Config\Include\FXMSitecore.FXM.Solr.DomainsSearch.DefaultIndexConfiguration.config",
-                   "App_Config\Include\FXMSitecore.FXM.Solr.DomainsSearch.Index.Master.config",
-                   "App_Config\Include\FXMSitecore.FXM.Solr.DomainsSearch.Index.Web.config",
+                   "App_Config\Include\FXM\Sitecore.FXM.Lucene.DomainsSearch.Index.Master.config",
+                   "App_Config\Include\FXM\Sitecore.FXM.Lucene.DomainsSearch.Index.Web.config",
+                   "App_Config\Include\FXM\Sitecore.FXM.Solr.DomainsSearch.DefaultIndexConfiguration.config",
+                   "App_Config\Include\FXM\Sitecore.FXM.Solr.DomainsSearch.Index.Master.config",
+                   "App_Config\Include\FXM\Sitecore.FXM.Solr.DomainsSearch.Index.Web.config",
                    "App_Config\Include\ListManagement\Sitecore.ListManagement.Lucene.Index.List.config",
                    "App_Config\Include\ListManagement\Sitecore.ListManagement.Lucene.IndexConfiguration.config",
                    "App_Config\Include\ListManagement\Sitecore.ListManagement.Solr.Index.List.config",
@@ -1373,6 +1375,7 @@ function Get-FilesToEnableOnCDServer([xml]$config)
     $installPath = Join-path $config.InstallSettings.WebServer.SitecoreInstallRoot -ChildPath $config.InstallSettings.WebServer.SitecoreInstallFolder
     $webrootPath = Join-Path $installPath -ChildPath "Website"
 
+    # Based on https://doc.sitecore.net/sitecore_experience_platform/80/xdb_configuration/configure_a_content_delivery_server
     $filesFor80 = @(
                    # Marketing Platform
                    "App_Config\Include\ScalabilitySettings.config",
@@ -1383,6 +1386,7 @@ function Get-FilesToEnableOnCDServer([xml]$config)
                    "bin\Sitecore.ExperienceAnalytics.dll"
                    )
 
+    # Based on https://doc.sitecore.net/sitecore_experience_platform/xdb_configuration/configure_a_content_delivery_server
     $filesFor81 = @(
                    # Marketing Platform
                    "App_Config\Include\ScalabilitySettings.config",
@@ -1393,7 +1397,7 @@ function Get-FilesToEnableOnCDServer([xml]$config)
                    "App_Config\Include\Z.SwitchMasterToWeb\SwitchMasterToWeb.config",
 
                    # Social Connected
-                   "App_Config\Include\SocialSitecore.Social.ScalabilitySettings.config"
+                   "App_Config\Include\Social\Sitecore.Social.ScalabilitySettings.config"
                    )
 
     [decimal]$sitecoreVersion = Get-SitecoreVersion $config
