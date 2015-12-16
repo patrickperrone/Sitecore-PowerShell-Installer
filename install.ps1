@@ -442,6 +442,73 @@ function Test-SupportedSitecoreVersion([xml]$config)
     return $FALSE
 }
 
+function Test-MongoDbConfiguration([xml]$config)
+{
+    if (Get-ConfigOption $config "WebServer/MongoDb/enabled" $TRUE)
+    {
+        $username = $config.InstallSettings.WebServer.MongoDb.Credentials.Username
+        $password = $config.InstallSettings.WebServer.MongoDb.Credentials.Password        
+        if (!([string]::IsNullOrEmpty($username)))
+        {
+            if ([string]::IsNullOrEmpty($password))
+            {
+                Write-Host "A username was given without a password for MongoDB. The password cannot be blank." -ForegroundColor Red
+                return $FALSE
+            }
+        }
+
+        if (!([string]::IsNullOrEmpty($password)))
+        {
+            if ([string]::IsNullOrEmpty($username))
+            {
+                Write-Host "A password was given without a username for MongoDB. The username cannot be blank." -ForegroundColor Red
+                return $FALSE
+            }
+        }
+        
+        $numhosts = 0
+        $hosts = $config.InstallSettings.WebServer.MongoDb.Hosts.Host
+        foreach ($mongohost in $hosts)
+        {
+            if ($mongohost.HostName.Length -eq 0)
+            {
+                Write-Host "MongoDB HostName must cannot be empty." -ForegroundColor Red
+                return $FALSE
+            }
+            else
+            {
+                $numhosts++
+            }
+
+            if ($mongohost.Port.Length -gt 0)
+            {
+                try
+                {
+                    [int]$port = $mongohost.Port
+                    if ($port -lt 1 -or $port -gt 65535)
+                    {
+                        Write-Host "MongoDB host Port must be in the range 1-65535." -ForegroundColor Red
+                        return $FALSE
+                    }
+                }
+                catch [Exception]
+                {
+                    Write-Host ($_.Exception.Message) -ForegroundColor Red
+                    return $FALSE
+                }
+            }
+        }
+
+        if ($numhosts -lt 1)
+        {
+            Write-Host "MongoDB requies at least one Host to be specified." -ForegroundColor red
+            return $FALSE
+        }
+    }
+
+    return $TRUE
+}
+
 function Confirm-ConfigurationSettings([xml]$config)
 {
     if ([string]::IsNullOrEmpty($config.InstallSettings.SitecoreZipPath))
@@ -576,6 +643,12 @@ function Confirm-ConfigurationSettings([xml]$config)
                 return $FALSE
             }
         }
+    }
+
+    if (!(Test-MongoDbConfiguration $config))
+    {
+        Write-Host "There was a problem with the MongoDB configuration." -ForegroundColor Red
+        return $FALSE
     }
 
     if ([string]::IsNullOrEmpty($config.InstallSettings.Database.SqlServerName))
@@ -1640,29 +1713,54 @@ function Set-ConfigurationFiles([xml]$config)
         Write-Message $config "Addedd a session connection string" "White"
     }
 
-    # Modify Mongo connection strings
-    if (!([string]::IsNullOrEmpty($config.InstallSettings.WebServer.MongoDb.HostName)))
+    # Modify MongoDB connection strings
+    if (Get-ConfigOption $config "WebServer/MongoDb/enabled" $TRUE)
     {
         $mongoNodes = $connectionStringsConfig.SelectNodes("connectionStrings/add[contains(@connectionString, 'mongodb://')]")
         foreach ($node in $mongoNodes)
         {
             $url = [System.Uri]($node.connectionString)
-
             $builder = New-Object System.UriBuilder
-            $builder.Scheme = $url.Scheme
-            $builder.Host = $config.InstallSettings.WebServer.MongoDb.HostName
-            if (!([string]::IsNullOrEmpty($config.InstallSettings.WebServer.MongoDb.Port)))
+
+            $credentials = ""            
+            $username = $config.InstallSettings.WebServer.MongoDb.Credentials.Username
+            $password = $config.InstallSettings.WebServer.MongoDb.Credentials.Password        
+            if ($username.Length -gt 0)
             {
-                $builder.Port = $config.InstallSettings.WebServer.MongoDb.Port
+                $credentials = $username + ":" + $password + "@"
+            }
+
+            $hostAndPort = ""
+            $hosts = $config.InstallSettings.WebServer.MongoDb.Hosts.Host
+            foreach ($mongohost in $hosts)
+            {
+                if ($hostAndPort.Length -gt 0)
+                {
+                    $hostAndPort += ","
+                }
+                $hostAndPort += $mongohost.HostName
+                if ($mongohost.Port.Length -gt 0)
+                {
+                    $hostAndPort += ":" + $mongohost.Port
+                }
+            }            
+            if ($hostAndPort.Length -eq 0)
+            {
+                $hostAndPort = $url.Host
+                if ($url.Port -lt 1)
+                {
+                    $hostAndPort += $url.Port.ToString()
+                }
             }
 
             # Use the same prefix for MongoDB databases as we use for SQL
             $lastSegment = (Get-DatabaseNamePrefix $config) + $url.Segments[$url.Segments.Count-1]
             $newSegments = $url.Segments
             $newSegments[$newSegments.Count-1] = $lastSegment
-            $builder.Path = [string]::Join("",$newSegments)
+            $databaseName = [string]::Join("",$newSegments)
 
-            $node.SetAttribute("connectionString", $builder.ToString())
+            $connectionString = ("mongodb://{0}{1}{2}{3}" -f $credentials,$hostAndPort,$databaseName,$config.InstallSettings.WebServer.MongoDb.Options)
+            $node.SetAttribute("connectionString", $connectionString)
         }
 
         Write-Message $config "Changing host name for MongoDb connection strings" "White"
