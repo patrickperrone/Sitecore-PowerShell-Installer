@@ -731,26 +731,33 @@ function Confirm-ConfigurationSettings([xml]$config)
         Write-Host "There is a duplicate name in WebDatabaseCopies. Please remove the entry." -ForegroundColor Red
         return $FALSE
     }
-
-    if (Get-ConfigOption $config "WebServer/CDServerSettings/enabled" $TRUE -and Get-ConfigOption $config "WebServer/CDServerSettings/ConfigureFilesForCD")
+    
+    $folderName = $config.InstallSettings.WebServer.LastChildFolderOfIncludeDirectory
+    if (!([string]::IsNullOrEmpty($folderName)))
     {
-        $folderName = $config.InstallSettings.WebServer.CDServerSettings.LastChildFolderOfIncludeDirectory
         if (!($folderName.StartsWith("z")) -and !($folderName.StartsWith("Z")))
         {
-            Write-Host "CDServerSettings.LastChildFolderOfIncludeDirectory should have a name that guarantees it is the last folder (alphanumerically) in the /Include directory. Try prepending one or more 'z' characters to the name." -ForegroundColor Red
+            Write-Host "LastChildFolderOfIncludeDirectory should have a name that guarantees it is the last folder (alphanumerically) in the /App_Config/Include directory. Try prepending one or more 'z' characters to the name." -ForegroundColor Red
             return $FALSE
+        }
+    }
+
+    $versionToInstall = Get-SitecoreVersion $config $true
+    if ($versionToInstall -eq "8.0")
+    {
+        if ((Test-PublishingServerRole $config) -or
+            (Get-ConfigOption $config "WebServer/CDServerSettings/enabled" $TRUE -and Get-ConfigOption $config "WebServer/CDServerSettings/ConfigureFilesForCD"))
+        {
+            if ([string]::IsNullOrEmpty($folderName))
+            {
+                Write-Host "LastChildFolderOfIncludeDirectory cannot be null or empty." -ForegroundColor Red
+                return $FALSE
+            }
         }
     }
 
     if (Test-PublishingServerRole $config)
     {
-        $folderName = $config.InstallSettings.WebServer.CMServerSettings.LastChildFolderOfIncludeDirectory
-        if (!($folderName.StartsWith("z")) -and !($folderName.StartsWith("Z")))
-        {
-            Write-Host "CMServerSettings.LastChildFolderOfIncludeDirectory should have a name that guarantees it is the last folder (alphanumerically) in the /Include directory. Try prepending one or more 'z' characters to the name." -ForegroundColor Red
-            return $FALSE
-        }
-
         [int]$degrees = $null
         if (!([int32]::TryParse($config.InstallSettings.WebServer.CMServerSettings.Publishing.Parallel.MaxDegreesOfParallelism, [ref]$degrees)))
         {
@@ -1509,7 +1516,7 @@ function Enable-FilesForCDServer([xml]$config)
                 [decimal]$sitecoreVersion = Get-SitecoreVersion $config
                 if ($sitecoreVersion -eq 8.0)
                 {        
-                    $foldername = $config.InstallSettings.WebServer.CDServerSettings.LastChildFolderOfIncludeDirectory
+                    $foldername = $config.InstallSettings.WebServer.LastChildFolderOfIncludeDirectory
                     $folderPath = Join-Path (Split-Path $fileToEnable) -ChildPath $foldername
                 
                     # Create a new folder, this folder should be named so as to be patched last
@@ -1519,15 +1526,18 @@ function Enable-FilesForCDServer([xml]$config)
                 }
                 elseif ($sitecoreVersion -eq 8.1)
                 {
-                    # Change name of folder to LastChildFolderOfIncludeDirectory
-                    $newFolderName = $config.InstallSettings.WebServer.CDServerSettings.LastChildFolderOfIncludeDirectory
-                    $folderPath = Split-Path $fileToEnable
-                    $folderItem = Rename-Item $folderPath $newFolderName -PassThru
+                    $newFolderName = $config.InstallSettings.WebServer.LastChildFolderOfIncludeDirectory
+                    if (!([string]::IsNullOrEmpty($newFolderName)))
+                    {
+                        # Change name of folder to LastChildFolderOfIncludeDirectory
+                        $folderPath = Split-Path $fileToEnable
+                        $folderItem = Rename-Item $folderPath $newFolderName -PassThru
 
-                    $fileToEnable = Join-Path $folderItem.FullName -ChildPath $filename
+                        $fileToEnable = Join-Path $folderItem.FullName -ChildPath $filename
 
-                    # The matching config file has been moved, must rewrite match path
-                    $match = Join-Path $folderItem.FullName -ChildPath (Split-Path $match -leaf)
+                        # The matching config file has been moved, must rewrite match path
+                        $match = Join-Path $folderItem.FullName -ChildPath (Split-Path $match -leaf)
+                    }
                 }
             }
 
@@ -1576,11 +1586,29 @@ function Enable-FilesForPublishingServer([xml]$config)
             $filename = Split-Path $file -leaf
             if ($filename -eq "Sitecore.Publishing.DedicatedInstance.config")
             {
-                $foldername = $config.InstallSettings.WebServer.CMServerSettings.LastChildFolderOfIncludeDirectory
-                $filepath = Join-Path (Split-Path $file) -ChildPath $foldername
+                [decimal]$sitecoreVersion = Get-SitecoreVersion $config
+                if ($sitecoreVersion -eq 8.0)
+                {        
+                    $foldername = $config.InstallSettings.WebServer.LastChildFolderOfIncludeDirectory
+                    $filepath = Join-Path (Split-Path $file) -ChildPath $foldername
                 
-                # Create a new folder, this folder should be named so as to be patched last
-                New-Item $filepath -type directory -force | Out-Null
+                    # Create a new folder, this folder should be named so as to be patched last
+                    New-Item $filepath -type directory -force | Out-Null
+                }
+                elseif ($sitecoreVersion -eq 8.1)
+                {
+                    # Get 8.1's built-in folder
+                    $folderPath = Join-Path (Split-Path $file) -ChildPath "Z.SwitchMasterToWeb"
+                    $filepath = $folderPath
+
+                    $newFolderName = $config.InstallSettings.WebServer.LastChildFolderOfIncludeDirectory
+                    if (!([string]::IsNullOrEmpty($newFolderName)))
+                    {
+                        # Change name of 8.1's built-in folder to LastChildFolderOfIncludeDirectory
+                        $folderItem = Rename-Item $folderPath $newFolderName -PassThru
+                        $filepath = $folderItem.FullName
+                    }
+                }
 
                 $file = Join-Path $filepath -ChildPath $filename
             }
