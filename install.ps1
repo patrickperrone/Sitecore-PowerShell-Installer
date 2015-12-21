@@ -356,6 +356,16 @@ function Confirm-IISBindings([xml]$config)
             Write-Host ($_.Exception.Message) -ForegroundColor Red
             return $FALSE   
         }
+
+        try
+        {
+            [bool]$test = [System.Convert]::ToBoolean($binding.AddToHostsFile)
+        }
+        catch [Exception]
+        {
+            Write-Host ($_.Exception.Message) -ForegroundColor Red
+            return $FALSE   
+        }
     }
 
     return $TRUE
@@ -364,11 +374,8 @@ function Confirm-IISBindings([xml]$config)
 function Test-PublishingServerRole([xml]$config)
 {
     if (Get-ConfigOption $config "WebServer/CMServerSettings/enabled" $TRUE)
-    {
-        if (!([string]::IsNullOrEmpty($config.InstallSettings.WebServer.CMServerSettings.Publishing.PublishingInstance)))
-        {
-            return $TRUE
-        }
+    {    
+        return (Get-ConfigOption $config "WebServer/CMServerSettings/Publishing/enabled" $TRUE)            
     }
     return $FALSE
 }
@@ -758,6 +765,12 @@ function Confirm-ConfigurationSettings([xml]$config)
 
     if (Test-PublishingServerRole $config)
     {
+        if ([string]::IsNullOrEmpty($config.InstallSettings.WebServer.CMServerSettings.Publishing.PublishingInstance))
+        {
+            Write-Host "PublishingInstance cannot be null or empty." -ForegroundColor Red
+            return $FALSE
+        }
+
         [int]$degrees = $null
         if (!([int32]::TryParse($config.InstallSettings.WebServer.CMServerSettings.Publishing.Parallel.MaxDegreesOfParallelism, [ref]$degrees)))
         {
@@ -1199,7 +1212,7 @@ function Initialize-WebSite([xml]$config)
                 New-WebBinding -Name $iisSiteName -IPAddress $binding.IP -Port $binding.Port -HostHeader $binding.HostHeader
             }
 
-            if ($binding.HostHeader.Length -ne 0)
+            if ($binding.HostHeader.Length -ne 0 -and !([string]::IsNullOrEmpty($binding.AddToHostsFile)) -and [System.Convert]::ToBoolean($binding.AddToHostsFile))
             {
                 # Add hostname(s) to hosts file
                 $hostsPath = "$env:windir\System32\drivers\etc\hosts"
