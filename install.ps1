@@ -1,3 +1,5 @@
+# Specify a path to the .config file if you do not wish to put the .config file in the same directory as the script
+$configPath = ""
 $scriptDir = Split-Path (Resolve-Path $myInvocation.MyCommand.Path)
 
 function Write-Message([xml]$config, [string]$message, [string]$messageColor, [bool]$logOnly=$FALSE)
@@ -84,10 +86,25 @@ function Test-PreRequisites
     return $TRUE
 }
 
-function Read-InstallConfigFile
+function Read-InstallConfigFile([string]$configPath)
 {
-    [xml]$Config = Get-Content ($scriptDir + "\install.config")
-    return $Config
+    if ([string]::IsNullOrEmpty($configPath))
+    {
+        [xml]$configXml = Get-Content ($scriptDir + "\install.config")
+    }
+    else
+    {
+        if (Test-Path $configPath)
+        {
+            [xml]$configXml = Get-Content ($configPath)
+        }
+        else
+        {
+            Write-Host "Could not find configuration file at specified path: $confgPath" -ForegroundColor Red
+        }
+    }
+
+    return $configXml
 }
 
 function Get-ConfigOption([xml]$config, [string]$optionName, [bool]$isAttribute=$FALSE)
@@ -2080,7 +2097,7 @@ function Start-Browser([string]$siteUrl)
     $ie.navigate($siteUrl)
 }
 
-function Install-SitecoreApplication
+function Install-SitecoreApplication([string]$configPath)
 {
     $deleteBackupFiles = $TRUE
 
@@ -2090,9 +2107,10 @@ function Install-SitecoreApplication
         return
     }
     
-    [xml]$config = Read-InstallConfigFile
+    [xml]$config = Read-InstallConfigFile $configPath
     if ($config -eq $null)
     {
+        Write-Host "Aborting install." -ForegroundColor Red
         return
     }
 
@@ -2153,4 +2171,4 @@ function Install-SitecoreApplication
     }
 }
 
-Install-SitecoreApplication
+Install-SitecoreApplication $configPath
