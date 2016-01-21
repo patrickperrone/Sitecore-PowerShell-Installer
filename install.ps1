@@ -1710,6 +1710,13 @@ function Set-ConfigurationFiles([xml]$config)
         Write-Message $config "Changing session state provider to MSSQL" "White"
     }
 
+    # Disable Sitecore's Upload Watcher
+    if (Get-ConfigOption $config "WebServer/CDServerSettings/DisableUploadWatcher")
+    {
+        $node = $webconfig.configuration.SelectSingleNode("system.webServer/modules/add[@name='SitecoreUploadWatcher']")
+        $node.ParentNode.InnerXml = $node.ParentNode.InnerXml.Replace($node.OuterXml, $node.OuterXml.Insert(0, "<!--").Insert($node.OuterXml.Length+4, "-->"))
+    }
+
     Write-Message $config "Saving changes to Web.config" "White"
     $webconfig.Save($webConfigPath)
     #endregion
@@ -2026,14 +2033,13 @@ function Block-AnonymousUsers([xml]$config, [string]$iisSiteName)
     }
 }
 
-function Revoke-ExecutePermission([xml]$config, [string]$iisSiteName)
+function Revoke-ExecutePermission([xml]$config, [string]$iisSiteName, [string]$folderPath)
 {
-    Write-Message $config "Denying execute permission on the /upload and /temp folders." "White"
-    Set-WebConfigurationProperty /system.WebServer/handlers "IIS:\sites\$iisSiteName\upload" -Name accessPolicy -value "Read"
-    Set-WebConfigurationProperty /system.WebServer/handlers "IIS:\sites\$iisSiteName\temp" -Name accessPolicy -value "Read"
+    Write-Message $config "Denying execute permission on the $folderPath folder." "White"
+    Set-WebConfigurationProperty /system.WebServer/handlers "IIS:\sites\$iisSiteName\$folderPath" -Name accessPolicy -value "Read"
 }
 
-function Apply-SecuritySettings([xml]$config, [string]$iisSiteName)
+function Set-SecuritySettings([xml]$config, [string]$iisSiteName)
 {
     Write-Message $config "`nApplying recommended security settings..." "Green"
 
@@ -2056,7 +2062,8 @@ function Apply-SecuritySettings([xml]$config, [string]$iisSiteName)
 
         if (Get-ConfigOption $config "WebServer/CDServerSettings/DenyExecutePermission")
         {
-            Revoke-ExecutePermission $config $iisSiteName
+            Revoke-ExecutePermission $config $iisSiteName "temp"
+            Revoke-ExecutePermission $config $iisSiteName "upload"
         }
     }
     
@@ -2146,7 +2153,7 @@ function Install-SitecoreApplication([string]$configPath)
 
         $iisSiteName = Initialize-WebSite $config
 
-        Apply-SecuritySettings $config $iisSiteName
+        Set-SecuritySettings $config $iisSiteName
 
         Initialize-SitecoreDatabases $config
     }
