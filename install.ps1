@@ -533,6 +533,44 @@ function Test-MongoDbConfiguration([xml]$config)
     return $TRUE
 }
 
+function Test-SessionStateConfiguration([xml]$config)
+{
+    if (Get-ConfigOption $config "WebServer/CMServerSettings/enabled" $TRUE)
+    {
+        if ($config.InstallSettings.WebServer.SessionStateProvider.Shared.ToLower() -ne "inproc")
+        {
+            Write-Host "Out of proc shared session state providers are not supported on CMs. You must use the inproc provider." -ForegroundColor Red
+            return $FALSE
+        }
+    }
+
+    $sessionStateProvider = $config.InstallSettings.WebServer.SessionStateProvider.Private.ToLower()
+    if ($sessionStateProvider -eq "mongo")
+    {
+        Write-Host "Mongo is not currently supported by installer for a private SessionStateProvider" -ForegroundColor Red
+        return $FALSE
+    }
+    elseif ($sessionStateProvider -ne "inproc" -and $sessionStateProvider -ne "mssql")
+    {
+        Write-Host "Private SessionStateProvider selection is not recognized" -ForegroundColor Red
+        return $FALSE
+    }
+
+    $sessionStateProvider = $config.InstallSettings.WebServer.SessionStateProvider.Shared.ToLower()
+    if ($sessionStateProvider -eq "mongo")
+    {
+        Write-Host "Mongo is not currently supported by installer for a shared SessionStateProvider" -ForegroundColor Red
+        return $FALSE
+    }
+    elseif ($sessionStateProvider -ne "inproc" -and $sessionStateProvider -ne "mssql")
+    {
+        Write-Host "Shared SessionStateProvider selection is not recognized" -ForegroundColor Red
+        return $FALSE
+    }
+
+    return $TRUE
+}
+
 function Confirm-ConfigurationSettings([xml]$config)
 {
     if ([string]::IsNullOrEmpty($config.InstallSettings.SitecoreZipPath))
@@ -593,16 +631,18 @@ function Confirm-ConfigurationSettings([xml]$config)
         return $FALSE
     }
 
-    $sessionStateProvider = $config.InstallSettings.WebServer.SessionStateProvider.ToLower()
-    if ($sessionStateProvider -eq "mongo")
+    if ($config.InstallSettings.WebServer.IISBindings.ChildNodes.Count -lt 1)
     {
-        Write-Host "Mongo is not currently supported by installer for SessionStateProvider" -ForegroundColor Red
+        Write-Host "IISBindings should provide at least one Binding." -ForegroundColor red
         return $FALSE
     }
-    elseif ($sessionStateProvider -ne "inproc" -and $sessionStateProvider -ne "mssql")
+    else
     {
-        Write-Host "SessionStateProvider selection is not recognized" -ForegroundColor Red
-        return $FALSE
+        if (!(Confirm-IISBindings $config))
+        {
+            Write-Host "There was a problem with an IIS Binding." -ForegroundColor Red
+            return $FALSE
+        }
     }
 
     if ([string]::IsNullOrEmpty($config.InstallSettings.WebServer.AppPoolIdentity))
@@ -637,23 +677,15 @@ function Confirm-ConfigurationSettings([xml]$config)
         }
     }
 
-    if ($config.InstallSettings.WebServer.IISBindings.ChildNodes.Count -lt 1)
-    {
-        Write-Host "IISBindings should provide at least one Binding." -ForegroundColor red
-        return $FALSE
-    }
-    else
-    {
-        if (!(Confirm-IISBindings $config))
-        {
-            Write-Host "There was a problem with an IIS Binding." -ForegroundColor Red
-            return $FALSE
-        }
-    }
-
     if ((Get-ConfigOption $config "WebServer/CMServerSettings/enabled" $TRUE) -and (Get-ConfigOption $config "WebServer/CDServerSettings/enabled" $TRUE))
     {
         Write-Host "CMServerSettings and CDServerSettings are both enabled. The Sitecore instance cannot be a CM and a CD server at the same time." -ForegroundColor Red
+        return $FALSE
+    }
+
+    if (!(Get-ConfigOption $config "WebServer/CMServerSettings/enabled" $TRUE) -and !(Get-ConfigOption $config "WebServer/CDServerSettings/enabled" $TRUE))
+    {
+        Write-Host "Neither CMServerSettings nor CDServerSettings are enabled. You must choose a role for the Sitecore instance." -ForegroundColor Red
         return $FALSE
     }
 
@@ -667,6 +699,12 @@ function Confirm-ConfigurationSettings([xml]$config)
                 return $FALSE
             }
         }
+    }
+
+    if (!(Test-SessionStateConfiguration $config))
+    {
+        Write-Host "There was a problem with the Session State configuration." -ForegroundColor Red
+        return $FALSE
     }
 
     if (!(Test-MongoDbConfiguration $config))
@@ -1702,12 +1740,12 @@ function Set-ConfigurationFiles([xml]$config)
         $webconfig.configuration.SelectSingleNode("sitecore/sc.variable[@name='dataFolder']").SetAttribute("value", $dataFolderPath)
     }
 
-    # Modify sessionState element
-    if ($config.InstallSettings.WebServer.SessionStateProvider.ToLower() -eq "mssql")
+    # Modify sessionState element    
+    if ($config.InstallSettings.WebServer.SessionStateProvider.Private.ToLower() -eq "mssql")
     {
         $webconfig.configuration.SelectSingleNode("system.web/sessionState").SetAttribute("mode", "Custom")
         $webconfig.configuration.SelectSingleNode("system.web/sessionState").SetAttribute("customProvider", "mssql")
-        Write-Message $config "Changing session state provider to MSSQL" "White"
+        Write-Message $config "Changing private session state provider to MSSQL" "White"
     }
 
     # Disable Sitecore's Upload Watcher
@@ -1744,9 +1782,9 @@ function Set-ConfigurationFiles([xml]$config)
     }
 
     # Add additional connection strings for each web database copy
-     $dbCopies = $config.InstallSettings.Database.WebDatabaseCopies
-     foreach ($copy in $dbCopies.copy)
-     {
+    $dbCopies = $config.InstallSettings.Database.WebDatabaseCopies
+    foreach ($copy in $dbCopies.copy)
+    {
         $dbElement = $connectionStringsConfig.CreateElement("add")
 
         $dbAttr = $connectionStringsConfig.CreateAttribute("name")
@@ -1759,10 +1797,10 @@ function Set-ConfigurationFiles([xml]$config)
 
         $connectionStringsConfig.DocumentElement.AppendChild($dbElement) | Out-Null
         Write-Message $config "Addedd a $($copy.Trim()) connection string" "White"
-     }
+    }
 
     # Optionally add a session connection string
-    if ($config.InstallSettings.WebServer.SessionStateProvider.ToLower() -eq "mssql")
+    if ($config.InstallSettings.WebServer.SessionStateProvider.Private.ToLower() -eq "mssql" -or $config.InstallSettings.WebServer.SessionStateProvider.Private.ToLower() -eq "mssql")
     {
         $sessionElement = $connectionStringsConfig.CreateElement("add")
 
@@ -1848,6 +1886,66 @@ function Set-ConfigurationFiles([xml]$config)
 
     Write-Message $config "Saving ConnectionStrings.config" "White"
     $connectionStringsConfig.Save($connectionStringsPath)
+    #endregion
+
+    #region Edit Sitecore.Analytics.Tracker.config
+    if ($config.InstallSettings.WebServer.SessionStateProvider.Shared.ToLower() -eq "mssql")
+    {
+        $trackerPath = Join-Path $installPath -ChildPath "Website\App_Config\Include\Sitecore.Analytics.Tracking.config"
+        $trackerConfig = [xml](Get-Content $trackerPath)
+        $backup = $trackerPath + "__$currentDate"
+        Write-Message $config "Backing up Sitecore.Analytics.Tracker.config" "White"
+        $trackerConfig.Save($backup)
+        $backupFiles.Add($backup)
+
+        Write-Message $config "Changing shared session state provider to MSSQL" "White"
+        $trackerConfig.configuration.SelectSingleNode("sitecore/tracking/sharedSessionState").SetAttribute("defaultProvider", "mssql")
+
+        # Delete existing mssql provider if it exists
+        $expression = "sitecore/tracking/sharedSessionState/providers/add[translate(@name, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ', 'abcdefghijklmnopqrstuvwxyz') = 'mssql']"
+        $node = $trackerConfig.configuration.SelectSingleNode($expression)
+        while ($node -ne $null)
+        {
+            $node.ParentNode.RemoveChild($node)
+            $node = $trackerConfig.configuration.SelectSingleNode($expression)
+        }
+
+        # Create a mssql provider
+        $expression = "sitecore/tracking/sharedSessionState/providers"
+        $node = $trackerConfig.configuration.SelectSingleNode($expression)
+        $element = $trackerConfig.CreateElement("add")
+        #name
+        $attribute = $trackerConfig.CreateAttribute("name")
+        $attribute.Value = "mssql"
+        $element.Attributes.Append($attribute) | Out-Null
+        #type
+        $attribute = $trackerConfig.CreateAttribute("type")
+        $attribute.Value = "Sitecore.SessionProvider.Sql.SqlSessionStateProvider,Sitecore.SessionProvider.Sql"
+        $element.Attributes.Append($attribute) | Out-Null
+        #connectionStringName
+        $attribute = $trackerConfig.CreateAttribute("connectionStringName")
+        $attribute.Value = "session"
+        $element.Attributes.Append($attribute) | Out-Null
+        #pollingInterval
+        $attribute = $trackerConfig.CreateAttribute("pollingInterval")
+        $attribute.Value = "2"
+        $element.Attributes.Append($attribute) | Out-Null
+        #compression
+        $attribute = $trackerConfig.CreateAttribute("compression")
+        $attribute.Value = "true"
+        $element.Attributes.Append($attribute) | Out-Null
+        #sessionType
+        $attribute = $trackerConfig.CreateAttribute("shared")
+        $attribute.Value = "true"
+        $element.Attributes.Append($attribute) | Out-Null
+        $node.AppendChild($element) | Out-Null
+
+        # Set sharedSessionState's defaultProvider to mssql
+        $node = $trackerConfig.configuration.SelectSingleNode("sitecore/tracking/sharedSessionState").SetAttribute("defaultProvider", "mssql")
+
+        Write-Message $config "Saving changes to Sitecore.Analytics.Tracker.config" "White"
+        $trackerConfig.Save($trackerPath)
+    }
     #endregion
 
     #region Edit Sitecore.ContentSearch.Solr.DefaultIndexConfiguration.config.example
@@ -2139,6 +2237,20 @@ function Install-SitecoreApplication([string]$configPath)
     $date = Get-Date    
     $message = "Starting Sitecore install [version $(Get-SitecoreVersion $config $TRUE $TRUE)] - $date" 
     Write-Message $config $message "Green"
+
+    if (Get-ConfigOption $config "WebServer/CMServerSettings/enabled" $TRUE)
+    {
+        $role = "CM"
+        if (Get-ConfigOption $config "WebServer/CMServerSettings/Publishing/enabled" $TRUE)
+        {
+            $role = "Publishing Server"
+        }
+    }
+    elseif (Get-ConfigOption $config "WebServer/CDServerSettings/enabled" $TRUE)
+    {
+        $role = "CD"
+    }
+    Write-Message $config "Configuring server for [$role] role." "White"
 
     try
     {
