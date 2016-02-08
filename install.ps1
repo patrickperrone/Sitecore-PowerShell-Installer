@@ -1,34 +1,47 @@
 # Specify a path to the .config file if you do not wish to put the .config file in the same directory as the script
 $configPath = ""
 $scriptDir = Split-Path (Resolve-Path $myInvocation.MyCommand.Path)
+# Assume there is no host console available until we can read the config file.
+$hostScreenAvailable = $FALSE
 
-function Write-Message([xml]$config, [string]$message, [string]$messageColor, [bool]$logOnly=$FALSE)
+function Write-Message([xml]$config, [string]$Message, [string]$MessageColor="White", [bool]$WriteToLogOnly=$FALSE, [bool]$WriteToLog=$FALSE, [bool]$HostConsoleAvailable=$FALSE)
 {
-    $installPath = Join-path $config.InstallSettings.WebServer.SitecoreInstallRoot -ChildPath $config.InstallSettings.WebServer.SitecoreInstallFolder
-    $logFileName = $config.InstallSettings.LogFileName
-    $logPath = Join-path $installPath -ChildPath $logFileName
-
-    # Write message to log file
-    if (!([string]::IsNullOrEmpty($logFileName)))
+    if ($config -ne $null)
     {
-        Add-Content $logPath $message
+        $installPath = Join-path $config.InstallSettings.WebServer.SitecoreInstallRoot -ChildPath $config.InstallSettings.WebServer.SitecoreInstallFolder
+        $logFileName = $config.InstallSettings.LogFileName
+        $logPath = Join-path $installPath -ChildPath $logFileName
     }
 
-    # Write message to screen
-    if (!($logOnly))
+    # Write message to log file
+    if (!([string]::IsNullOrEmpty($logFileName)) -and $WriteToLog)
     {
-        Write-Host $message -ForegroundColor $messageColor;
+        Add-Content $logPath $Message
+    }
+
+    if (!$WriteToLogOnly)
+    {
+        if ($HostConsoleAvailable)
+        {
+            # Write message to screen
+            Write-Host $Message -ForegroundColor $MessageColor
+        }
+        else
+        {
+            # Write message to output stream
+            Write-Verbose $Message
+        }
     }
 }
 
 function Remove-BackupFiles([System.Collections.Generic.List[string]]$backupFiles)
 {
-    Write-Message $config "`nDeleting backed up files..." "Green"
+    Write-Message $config "`nDeleting backed up files..." "Green" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     foreach ($file in $backupFiles)
     {
         Remove-Item $file
     }
-    Write-Message $config "Removed back ups!" "White"
+    Write-Message $config "Removed back ups!" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
 }
 
 function Test-Module([string]$name)
@@ -37,9 +50,9 @@ function Test-Module([string]$name)
     {
         if(Get-Module -ListAvailable | Where-Object { $_.name -eq $name })
         {
-            Write-Host "Importing $name module." -ForegroundColor Gray
-            Import-Module -Name $name
-            Write-Host "`n"
+            Write-Message $null "Importing $name module." "Gray" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+            Import-Module -Name $name -DisableNameChecking
+            Write-Message $null "`n" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
             $TRUE
         }
         else
@@ -49,26 +62,26 @@ function Test-Module([string]$name)
     }
     else
     {
-        write-host "$name module is already imported.`n" -ForegroundColor Gray
+        Write-Message $null "$name module is already imported.`n" "Gray" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
         $TRUE
     }
 }
 
 function Test-PreRequisites
 {
-    Write-Host "Testing script pre-requisites." -ForegroundColor Gray
+    Write-Message $null "Testing script pre-requisites." "Gray" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
 
     $currentPrincipal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
     if (!($currentPrincipal.IsInRole( [Security.Principal.WindowsBuiltInRole]::Administrator )))
     {
-        write-host "Warning: PowerShell must run as an Administrator." -ForegroundColor Red
+        Write-Message $null "Warning: PowerShell must run as an Administrator." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
         return $FALSE
     }
 
     $moduleName = "SQLPS"
     if (!(Test-Module $moduleName))
     {
-        Write-Host "Warning: SQL PowerShell Module ($moduleName) is not installed." -ForegroundColor Red
+        Write-Message $null "Warning: SQL PowerShell Module ($moduleName) is not installed." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
         return $FALSE
     }
     else
@@ -79,7 +92,7 @@ function Test-PreRequisites
     $moduleName = "WebAdministration"
     if (!(Test-Module $moduleName))
     {
-        Write-Host "Warning: IIS PowerShell Module ($moduleName) is not installed." -ForegroundColor Red
+        Write-Message $null "Warning: IIS PowerShell Module ($moduleName) is not installed." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
         return $FALSE
     }
 
@@ -100,7 +113,7 @@ function Read-InstallConfigFile([string]$configPath)
         }
         else
         {
-            Write-Host "Could not find configuration file at specified path: $confgPath" -ForegroundColor Red
+            Write-Message $null "Could not find configuration file at specified path: $confgPath" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
         }
     }
 
@@ -161,7 +174,7 @@ function Get-SqlLoginAccountForDataAccess([xml]$config)
     }
     else
     {
-        Write-Host "The SqlLoginForInstall is a domain account and SqlLoginForDataAccess is undefined. You must supply a value for SqlLoginForDataAccess." -ForegroundColor Yellow
+        Write-Message $null "The SqlLoginForInstall is a domain account and SqlLoginForDataAccess is undefined. You must supply a value for SqlLoginForDataAccess." "Yellow" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
     }
 
     return $null
@@ -233,8 +246,8 @@ function Confirm-SqlConnectionAndRoles([xml]$config)
         $isSysAdmin = Confirm-MemberOfRole $memberName "sysadmin" $sqlServerSmo
         if (!$isSysAdmin)
         {
-            Write-Host "$memberName doesn't have required server roles in SQL" -ForegroundColor Red
-            Write-Host "Grant the sysadmin role to $memberName" -ForegroundColor Red
+            Write-Message $null "$memberName doesn't have required server roles in SQL" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+            Write-Message $null "Grant the sysadmin role to $memberName" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
             return $FALSE
         }
 
@@ -242,7 +255,7 @@ function Confirm-SqlConnectionAndRoles([xml]$config)
         $loginName = Get-SqlLoginAccountForDataAccess $config
         if ($sqlServerSmo.Logins[$loginName] -eq $null)
         {
-            Write-Host "Could not find a login called $loginName on SQL server" -ForegroundColor Red
+            Write-Message $null "Could not find a login called $loginName on SQL server" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
             return $FALSE
         }
 
@@ -250,7 +263,7 @@ function Confirm-SqlConnectionAndRoles([xml]$config)
     }
     catch [Exception]
     {
-        Write-Host  $_.Exception -ForegroundColor Red
+        Write-Message $null $_.Exception "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
         return $FALSE
     }
 }
@@ -288,10 +301,10 @@ function Confirm-SqlInstallPath([xml]$config)
         }  
         else
         {
-            Write-Host "SQL doesn't appear to have enough rights for the install path." -ForegroundColor Yellow
-            Write-Host "This might be because SQL is using builtin virtual service accounts, which are local accounts that exist on a different server than the Sitecore server. If this is true, you may IGNORE this message." -ForegroundColor Yellow
-            Write-Host "Ensure that the SQL service for your SQL instance has FullControl of $dbInstallPath" -ForegroundColor Yellow
-            Write-Host "Failure to do so will PREVENT the databases from attaching.`n" -ForegroundColor Yellow
+            Write-Message $null "SQL doesn't appear to have enough rights for the install path." "Yellow" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+            Write-Message $null "This might be because SQL is using builtin virtual service accounts, which are local accounts that exist on a different server than the Sitecore server. If this is true, you may IGNORE this message." "Yellow" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+            Write-Message $null "Ensure that the SQL service for your SQL instance has FullControl of $dbInstallPath" "Yellow" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+            Write-Message $null "Failure to do so will PREVENT the databases from attaching.`n" "Yellow" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
 
             if (Get-ConfigOption $config "SuppressPrompts")
             {
@@ -311,7 +324,7 @@ function Confirm-SqlInstallPath([xml]$config)
     }
     else
     {
-        Write-Host "Path does not exist: $dbInstallPath" -ForegroundColor Red
+        Write-Message $null "Path does not exist: $dbInstallPath" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
     }
 
     return $FALSE
@@ -323,13 +336,13 @@ function Confirm-WebDatabseCopyNames([xml]$config)
 
     if ($dbCopies.copy.Count -ne ($dbCopies.copy | select -Unique).Count)
     {
-        Write-Host "The name of a web database copy was used more than once in the config file." -ForegroundColor Red
+        Write-Message $null "The name of a web database copy was used more than once in the config file." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
         return $FALSE
     }
 
     if ($dbCopies.copy -contains "web")
     {
-        Write-Host "Cannot use 'web' (name is case-insensitive) as the name of a web database copy." -ForegroundColor Red
+        Write-Message $null "Cannot use 'web' (name is case-insensitive) as the name of a web database copy." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
         return $FALSE
     }
 
@@ -343,19 +356,19 @@ function Confirm-IISBindings([xml]$config)
     {
         if ($binding.IP.Length -eq 0)
         {
-            Write-Host "Binding must contain a non-empty IP attribute." -ForegroundColor Red
+            Write-Message $null "Binding must contain a non-empty IP attribute." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
             return $FALSE
         }
 
         if ($binding.IP -ne "*" -and !([bool]($binding.IP -as [ipaddress])))
         {
-            Write-Host "Binding's IP attribute must either be a valid IP or the '*' character." -ForegroundColor Red
+            Write-Message $null "Binding's IP attribute must either be a valid IP or the '*' character." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
             return $FALSE
         }
 
         if ($binding.Port.Length -eq 0)
         {
-            Write-Host "Binding must contain a non-empty Port attribute." -ForegroundColor Red
+            Write-Message $null "Binding must contain a non-empty Port attribute." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
             return $FALSE
         }
 
@@ -364,13 +377,13 @@ function Confirm-IISBindings([xml]$config)
             [int]$port = $binding.Port
             if ($port -lt 1 -or $port -gt 65535)
             {
-                Write-Host "Binding Port must be in the range 1-65535." -ForegroundColor Red
+                Write-Message $null "Binding Port must be in the range 1-65535." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
                 return $FALSE
             }
         }
         catch [Exception]
         {
-            Write-Host ($_.Exception.Message) -ForegroundColor Red
+            Write-Message $null ($_.Exception.Message) "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
             return $FALSE   
         }
 
@@ -380,7 +393,7 @@ function Confirm-IISBindings([xml]$config)
         }
         catch [Exception]
         {
-            Write-Host ($_.Exception.Message) -ForegroundColor Red
+            Write-Message $null ($_.Exception.Message) "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
             return $FALSE   
         }
     }
@@ -476,7 +489,7 @@ function Test-MongoDbConfiguration([xml]$config)
         {
             if ([string]::IsNullOrEmpty($password))
             {
-                Write-Host "A username was given without a password for MongoDB. The password cannot be blank." -ForegroundColor Red
+                Write-Message $null "A username was given without a password for MongoDB. The password cannot be blank." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
                 return $FALSE
             }
         }
@@ -485,7 +498,7 @@ function Test-MongoDbConfiguration([xml]$config)
         {
             if ([string]::IsNullOrEmpty($username))
             {
-                Write-Host "A password was given without a username for MongoDB. The username cannot be blank." -ForegroundColor Red
+                Write-Message $null "A password was given without a username for MongoDB. The username cannot be blank." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
                 return $FALSE
             }
         }
@@ -496,7 +509,7 @@ function Test-MongoDbConfiguration([xml]$config)
         {
             if ($mongohost.HostName.Length -eq 0)
             {
-                Write-Host "MongoDB HostName must cannot be empty." -ForegroundColor Red
+                Write-Message $null "MongoDB HostName must cannot be empty." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
                 return $FALSE
             }
             else
@@ -511,13 +524,13 @@ function Test-MongoDbConfiguration([xml]$config)
                     [int]$port = $mongohost.Port
                     if ($port -lt 1 -or $port -gt 65535)
                     {
-                        Write-Host "MongoDB host Port must be in the range 1-65535." -ForegroundColor Red
+                        Write-Message $null "MongoDB host Port must be in the range 1-65535." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
                         return $FALSE
                     }
                 }
                 catch [Exception]
                 {
-                    Write-Host ($_.Exception.Message) -ForegroundColor Red
+                    Write-Message $null ($_.Exception.Message) "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
                     return $FALSE
                 }
             }
@@ -525,7 +538,7 @@ function Test-MongoDbConfiguration([xml]$config)
 
         if ($numhosts -lt 1)
         {
-            Write-Host "MongoDB requies at least one Host to be specified." -ForegroundColor red
+            Write-Message $null "MongoDB requies at least one Host to be specified." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
             return $FALSE
         }
     }
@@ -539,7 +552,7 @@ function Test-SessionStateConfiguration([xml]$config)
     {
         if ($config.InstallSettings.WebServer.SessionStateProvider.Shared.ToLower() -ne "inproc")
         {
-            Write-Host "Out of proc shared session state providers are not supported on CMs. You must use the inproc provider." -ForegroundColor Red
+            Write-Message $null "Out of proc shared session state providers are not supported on CMs. You must use the inproc provider." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
             return $FALSE
         }
     }
@@ -547,24 +560,24 @@ function Test-SessionStateConfiguration([xml]$config)
     $sessionStateProvider = $config.InstallSettings.WebServer.SessionStateProvider.Private.ToLower()
     if ($sessionStateProvider -eq "mongo")
     {
-        Write-Host "Mongo is not currently supported by installer for a private SessionStateProvider" -ForegroundColor Red
+        Write-Message $null "Mongo is not currently supported by installer for a private SessionStateProvider" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
         return $FALSE
     }
     elseif ($sessionStateProvider -ne "inproc" -and $sessionStateProvider -ne "mssql")
     {
-        Write-Host "Private SessionStateProvider selection is not recognized" -ForegroundColor Red
+        Write-Message $null "Private SessionStateProvider selection is not recognized" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
         return $FALSE
     }
 
     $sessionStateProvider = $config.InstallSettings.WebServer.SessionStateProvider.Shared.ToLower()
     if ($sessionStateProvider -eq "mongo")
     {
-        Write-Host "Mongo is not currently supported by installer for a shared SessionStateProvider" -ForegroundColor Red
+        Write-Message $null "Mongo is not currently supported by installer for a shared SessionStateProvider" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
         return $FALSE
     }
     elseif ($sessionStateProvider -ne "inproc" -and $sessionStateProvider -ne "mssql")
     {
-        Write-Host "Shared SessionStateProvider selection is not recognized" -ForegroundColor Red
+        Write-Message $null "Shared SessionStateProvider selection is not recognized" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
         return $FALSE
     }
 
@@ -575,79 +588,79 @@ function Confirm-ConfigurationSettings([xml]$config)
 {
     if ([string]::IsNullOrEmpty($config.InstallSettings.SitecoreZipPath))
     {
-        Write-Host "SitecoreZipPath cannot be null or empty" -ForegroundColor Red
+        Write-Message $null "SitecoreZipPath cannot be null or empty" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
         return $FALSE
     }
     else
     {
         if (!(Test-Path $config.InstallSettings.SitecoreZipPath))
         {
-            Write-Host "Couldn't find a file specified by SitecoreZipPath" -ForegroundColor Red
+            Write-Message $null "Couldn't find a file specified by SitecoreZipPath" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
             return $FALSE
         }
 
         if (!(Test-SupportedSitecoreVersion $config))
         {
-            Write-Host "The version of Sitecore you are attempting to install is not supported." -ForegroundColor Red
+            Write-Message $null "The version of Sitecore you are attempting to install is not supported." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
             return $FALSE
         }
     }
 
     if ([string]::IsNullOrEmpty($config.InstallSettings.WebServer.LicenseFilePath))
     {
-        Write-Host "LicenseFilePath cannot be null or empty" -ForegroundColor Red
+        Write-Message $null "LicenseFilePath cannot be null or empty" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
         return $FALSE
     }
     else
     {
         if (!(Test-Path $config.InstallSettings.WebServer.LicenseFilePath))
         {
-            Write-Host "Couldn't find a file specified by LicenseFilePath" -ForegroundColor Red
+            Write-Message $null "Couldn't find a file specified by LicenseFilePath" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
             return $FALSE
         }
     }
 
     if ([string]::IsNullOrEmpty($config.InstallSettings.WebServer.SitecoreInstallRoot))
     {
-        Write-Host "SitecoreInstallRoot cannot be null or empty" -ForegroundColor Red
+        Write-Message $null "SitecoreInstallRoot cannot be null or empty" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
         return $FALSE
     }
 
     if ([string]::IsNullOrEmpty($config.InstallSettings.WebServer.SitecoreInstallFolder))
     {
-        Write-Host "SitecoreInstallFolder cannot be null or empty" -ForegroundColor Red
+        Write-Message $null "SitecoreInstallFolder cannot be null or empty" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
         return $FALSE
     }
 
     if ([string]::IsNullOrEmpty($config.InstallSettings.WebServer.IISWebSiteName))
     {
-        Write-Host "IISWebSiteName cannot be null or empty" -ForegroundColor Red
+        Write-Message $null "IISWebSiteName cannot be null or empty" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
         return $FALSE
     }
 
     if ([string]::IsNullOrEmpty($config.InstallSettings.WebServer.DefaultRuntimeVersion))
     {
-        Write-Host "DefaultRuntimeVersion cannot be null or empty" -ForegroundColor Red
+        Write-Message $null "DefaultRuntimeVersion cannot be null or empty" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
         return $FALSE
     }
 
     if ($config.InstallSettings.WebServer.IISBindings.ChildNodes.Count -lt 1)
     {
-        Write-Host "IISBindings should provide at least one Binding." -ForegroundColor red
+        Write-Message $null "IISBindings should provide at least one Binding." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
         return $FALSE
     }
     else
     {
         if (!(Confirm-IISBindings $config))
         {
-            Write-Host "There was a problem with an IIS Binding." -ForegroundColor Red
+            Write-Message $null "There was a problem with an IIS Binding." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
             return $FALSE
         }
     }
 
     if ([string]::IsNullOrEmpty($config.InstallSettings.WebServer.AppPoolIdentity))
     {
-        Write-Host "AppPoolIdentity cannot be null or empty" -ForegroundColor Red
+        Write-Message $null "AppPoolIdentity cannot be null or empty" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
         return $FALSE
     }
     elseif ($config.InstallSettings.WebServer.AppPoolIdentity -ne "ApplicationPoolIdentity" -and $config.InstallSettings.WebServer.AppPoolIdentity -ne "NetworkService")
@@ -656,14 +669,14 @@ function Confirm-ConfigurationSettings([xml]$config)
         $split = $config.InstallSettings.WebServer.AppPoolIdentity.Split("\")
         if ([string]::IsNullOrEmpty($split[0]) -or [string]::IsNullOrEmpty($split[1]))
         {
-            Write-Host "AppPoolIdentity must be of the form <domain>\<username>" -ForegroundColor Red
+            Write-Message $null "AppPoolIdentity must be of the form <domain>\<username>" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
             return $FALSE
         }
 
         # Validate that we have a password
         if ([string]::IsNullOrEmpty($config.InstallSettings.WebServer.AppPoolIdentityPassword))
         {
-            Write-Host "AppPoolIdentityPassword cannot be null or empty" -ForegroundColor Red
+            Write-Message $null "AppPoolIdentityPassword cannot be null or empty" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
             return $FALSE
         }
     }
@@ -672,20 +685,20 @@ function Confirm-ConfigurationSettings([xml]$config)
         # Using a built-in account, ensure it will not be used for SQL login
         if (Get-ConfigOption $config "Database/UseWindowsAuthenticationForSqlDataAccess")
         {
-            Write-Host "Must use a domain account for application pool identity when also using Windows authentication for SQL login" -ForegroundColor Red
+            Write-Message $null "Must use a domain account for application pool identity when also using Windows authentication for SQL login" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
             return $FALSE
         }
     }
 
     if ((Get-ConfigOption $config "WebServer/CMServerSettings/enabled" $TRUE) -and (Get-ConfigOption $config "WebServer/CDServerSettings/enabled" $TRUE))
     {
-        Write-Host "CMServerSettings and CDServerSettings are both enabled. The Sitecore instance cannot be a CM and a CD server at the same time." -ForegroundColor Red
+        Write-Message $null "CMServerSettings and CDServerSettings are both enabled. The Sitecore instance cannot be a CM and a CD server at the same time." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
         return $FALSE
     }
 
     if (!(Get-ConfigOption $config "WebServer/CMServerSettings/enabled" $TRUE) -and !(Get-ConfigOption $config "WebServer/CDServerSettings/enabled" $TRUE))
     {
-        Write-Host "Neither CMServerSettings nor CDServerSettings are enabled. You must choose a role for the Sitecore instance." -ForegroundColor Red
+        Write-Message $null "Neither CMServerSettings nor CDServerSettings are enabled. You must choose a role for the Sitecore instance." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
         return $FALSE
     }
 
@@ -695,7 +708,7 @@ function Confirm-ConfigurationSettings([xml]$config)
         {
             if ([string]::IsNullOrEmpty($config.InstallSettings.WebServer.CMServerSettings.InstanceName))
             {
-                Write-Host "You cannot use a Publishing.InstanceName without also specifying an InstanceName." -ForegroundColor Red
+                Write-Message $null "You cannot use a Publishing.InstanceName without also specifying an InstanceName." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
                 return $FALSE
             }
         }
@@ -703,25 +716,25 @@ function Confirm-ConfigurationSettings([xml]$config)
 
     if (!(Test-SessionStateConfiguration $config))
     {
-        Write-Host "There was a problem with the Session State configuration." -ForegroundColor Red
+        Write-Message $null "There was a problem with the Session State configuration." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
         return $FALSE
     }
 
     if (!(Test-MongoDbConfiguration $config))
     {
-        Write-Host "There was a problem with the MongoDB configuration." -ForegroundColor Red
+        Write-Message $null "There was a problem with the MongoDB configuration." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
         return $FALSE
     }
 
     if ([string]::IsNullOrEmpty($config.InstallSettings.Database.SqlServerName))
     {
-        Write-Host "SqlServerName cannot be null or empty" -ForegroundColor Red
+        Write-Message $null "SqlServerName cannot be null or empty" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
         return $FALSE
     }
 
     if ([string]::IsNullOrEmpty($config.InstallSettings.Database.SqlLoginForInstall))
     {
-        Write-Host "SqlLoginForInstall cannot be null or empty" -ForegroundColor Red
+        Write-Message $null "SqlLoginForInstall cannot be null or empty" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
         return $FALSE
     }
     else
@@ -732,7 +745,7 @@ function Confirm-ConfigurationSettings([xml]$config)
             # Validate that input is in the form <domain>\<username>
             if ([string]::IsNullOrEmpty($split[0]) -or [string]::IsNullOrEmpty($split[1]))
             {
-                Write-Host "SqlLoginForInstall must be of the form <domain>\<username>" -ForegroundColor Red
+                Write-Message $null "SqlLoginForInstall must be of the form <domain>\<username>" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
                 return $FALSE
             }
         }
@@ -740,7 +753,7 @@ function Confirm-ConfigurationSettings([xml]$config)
 
     if ([string]::IsNullOrEmpty($config.InstallSettings.Database.SqlLoginForInstallPassword))
     {
-        Write-Host "SqlLoginForInstallPassword cannot be null or empty" -ForegroundColor Red
+        Write-Message $null "SqlLoginForInstallPassword cannot be null or empty" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
         return $FALSE
     }
 
@@ -748,7 +761,7 @@ function Confirm-ConfigurationSettings([xml]$config)
     {
         if ([string]::IsNullOrEmpty($config.InstallSettings.Database.SqlLoginForDataAccessPassword))
         {
-            Write-Host "SqlLoginForDataAccessPassword cannot be null or empty" -ForegroundColor Red
+            Write-Message $null "SqlLoginForDataAccessPassword cannot be null or empty" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
             return $FALSE
         }
 
@@ -756,7 +769,7 @@ function Confirm-ConfigurationSettings([xml]$config)
         $split = $config.InstallSettings.Database.SqlLoginForDataAccess.Split("\")
         if ($split.Count -eq 2)
         {
-            Write-Host "SqlLoginForDataAccess cannot be a domain account" -ForegroundColor Red
+            Write-Message $null "SqlLoginForDataAccess cannot be a domain account" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
             return $FALSE
         }
     }
@@ -765,32 +778,32 @@ function Confirm-ConfigurationSettings([xml]$config)
     {
         if ([string]::IsNullOrEmpty($config.InstallSettings.Database.DatabaseInstallPath.Local))
         {
-            Write-Host "DatabaseInstallPath.Local cannot be null or empty" -ForegroundColor Red
+            Write-Message $null "DatabaseInstallPath.Local cannot be null or empty" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
             return $FALSE
         }
     
         if (!(Confirm-SqlInstallPath $config))
         {
-            Write-Host "DatabaseInstallPath is not valid." -ForegroundColor Red
+            Write-Message $null "DatabaseInstallPath is not valid." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
             return $FALSE
         }
     }
 
     if (!(Confirm-SqlLoginConfiguration $config))
     {
-        Write-Host "The specified combination of accounts will not produce a valid SQL login for data access." -ForegroundColor Red
+        Write-Message $null "The specified combination of accounts will not produce a valid SQL login for data access." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
         return $FALSE
     }
 
     if(!(Confirm-SqlConnectionAndRoles $config))
     {
-        Write-Host "A problem has been detected with the SQL connection." -ForegroundColor Red
+        Write-Message $null "A problem has been detected with the SQL connection." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
         return $FALSE
     }
 
     if (!(Confirm-WebDatabseCopyNames $config))
     {
-        Write-Host "There is a duplicate name in WebDatabaseCopies. Please remove the entry." -ForegroundColor Red
+        Write-Message $null "There is a duplicate name in WebDatabaseCopies. Please remove the entry." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
         return $FALSE
     }
     
@@ -799,7 +812,7 @@ function Confirm-ConfigurationSettings([xml]$config)
     {
         if (!($folderName.StartsWith("z")) -and !($folderName.StartsWith("Z")))
         {
-            Write-Host "LastChildFolderOfIncludeDirectory should have a name that guarantees it is the last folder (alphanumerically) in the /App_Config/Include directory. Try prepending one or more 'z' characters to the name." -ForegroundColor Red
+            Write-Message $null "LastChildFolderOfIncludeDirectory should have a name that guarantees it is the last folder (alphanumerically) in the /App_Config/Include directory. Try prepending one or more 'z' characters to the name." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
             return $FALSE
         }
     }
@@ -812,7 +825,7 @@ function Confirm-ConfigurationSettings([xml]$config)
         {
             if ([string]::IsNullOrEmpty($folderName))
             {
-                Write-Host "LastChildFolderOfIncludeDirectory cannot be null or empty." -ForegroundColor Red
+                Write-Message $null "LastChildFolderOfIncludeDirectory cannot be null or empty." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
                 return $FALSE
             }
         }
@@ -822,31 +835,31 @@ function Confirm-ConfigurationSettings([xml]$config)
     {
         if ([string]::IsNullOrEmpty($config.InstallSettings.WebServer.CMServerSettings.Publishing.PublishingInstance))
         {
-            Write-Host "PublishingInstance cannot be null or empty." -ForegroundColor Red
+            Write-Message $null "PublishingInstance cannot be null or empty." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
             return $FALSE
         }
 
         [int]$degrees = $null
         if (!([int32]::TryParse($config.InstallSettings.WebServer.CMServerSettings.Publishing.Parallel.MaxDegreesOfParallelism, [ref]$degrees)))
         {
-            Write-Host "MaxDegreesOfParallelism must be an integer." -ForegroundColor red
+            Write-Message $null "MaxDegreesOfParallelism must be an integer." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
             return $FALSE
         }
 
         [int]$growthsize = $null
         if (!([int32]::TryParse($config.InstallSettings.WebServer.CMServerSettings.Publishing.Parallel.WebDatabaseAutoGrowthInMB, [ref]$growthsize)))
         {
-            Write-Host "WebDatabaseAutoGrowthInMB must be an integer." -ForegroundColor red
+            Write-Message $null "WebDatabaseAutoGrowthInMB must be an integer." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
             return $FALSE
         }
         elseif ($growthsize -lt 10)
         {
-            Write-Host "WebDatabaseAutoGrowthInMB cannot be less than 10MB." -ForegroundColor red
+            Write-Message $null "WebDatabaseAutoGrowthInMB cannot be less than 10MB." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
             return $FALSE
         }
         elseif ($growthsize -gt 100)
         {
-            Write-Host "WebDatabaseAutoGrowthInMB cannot be greater than 100MB." -ForegroundColor red
+            Write-Message $null "WebDatabaseAutoGrowthInMB cannot be greater than 100MB." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
             return $FALSE
         }
 
@@ -855,13 +868,13 @@ function Confirm-ConfigurationSettings([xml]$config)
         {
             if ($timeout -gt 43200)
             {
-                Write-Host "AppPoolIdleTimeout must be less than or equal to 43200." -ForegroundColor red
+                Write-Message $null "AppPoolIdleTimeout must be less than or equal to 43200." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
                 return $FALSE
             }
         }
         else
         {
-            Write-Host "AppPoolIdleTimeout must be an integer." -ForegroundColor red
+            Write-Message $null "AppPoolIdleTimeout must be an integer." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
             return $FALSE
         }
     }
@@ -881,7 +894,7 @@ function Copy-DatabaseFiles([xml]$config, [string]$zipPath)
 {
     $dbFolderPath =  Get-DatabaseInstallFolderPath $config $FALSE
 
-    Write-Message $config "Extracting database files from $zipPath to $dbFolderPath" "White"
+    Write-Message $config "Extracting database files from $zipPath to $dbFolderPath" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
 
     if (!(Test-Path $dbFolderPath))
     {
@@ -911,7 +924,7 @@ function Copy-DatabaseFiles([xml]$config, [string]$zipPath)
 
         if (Test-Path $filePath)
         {
-            Write-Message $config "$filePath already exists, skipping extraction" "Yellow"
+            Write-Message $config "$filePath already exists, skipping extraction" "Yellow" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
         }
         else
         {
@@ -936,32 +949,32 @@ function Copy-DatabaseFiles([xml]$config, [string]$zipPath)
         }
     }
 
-    Write-Message $config "Database files copied." "White"   
+    Write-Message $config "Database files copied." "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
 }
 
 function Copy-SitecoreFiles([xml]$config)
 {
-    Write-Message $config "`nCopying Sitecore files..." "Green"
+    Write-Message $config "`nCopying Sitecore files..." "Green" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
 
     $zipPath = $config.InstallSettings.SitecoreZipPath
     $installPath = Join-Path $config.InstallSettings.WebServer.SitecoreInstallRoot -ChildPath $config.InstallSettings.WebServer.SitecoreInstallFolder
 
     $shell = New-Object -com shell.application
 
-    Write-Message $config "Extracting files from $zipPath to $installPath" "White"
+    Write-Message $config "Extracting files from $zipPath to $installPath" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
 
     # Copy Data folder
     $folderName = "Data"
     $folderPath = Join-Path $installPath -ChildPath $folderName
     if (Test-Path $folderPath)
     {
-        Write-Message $config "$folderPath already exists, skipping extraction" "Yellow"
+        Write-Message $config "$folderPath already exists, skipping extraction" "Yellow" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     }
     else
     {
         $item = Find-FolderInZipFile $shell.NameSpace($zipPath).Items() $folderName
         $shell.NameSpace($installPath).CopyHere($item)
-        Write-Message $config "$folderName folder copied." "White"
+        Write-Message $config "$folderName folder copied." "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     }
 
     # Copy Website folder
@@ -969,13 +982,13 @@ function Copy-SitecoreFiles([xml]$config)
     $folderPath = Join-Path $installPath -ChildPath $folderName
     if (Test-Path $folderPath)
     {
-        Write-Message $config "$folderPath already exists, skipping extraction" "Yellow"
+        Write-Message $config "$folderPath already exists, skipping extraction" "Yellow" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     }
     else
     {
         $item = Find-FolderInZipFile $shell.NameSpace($zipPath).Items() $folderName
         $shell.NameSpace($installPath).CopyHere($item)
-        Write-Message $config "$folderName folder copied." "White"
+        Write-Message $config "$folderName folder copied." "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     }
 
     if (Get-ConfigOption $config "Database/InstallDatabase")
@@ -984,13 +997,13 @@ function Copy-SitecoreFiles([xml]$config)
     }
     else
     {
-        Write-Message $config "Skipping database file extraction: InstallDatabase option is false" "White"
+        Write-Message $config "Skipping database file extraction: InstallDatabase option is false" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     }
     
     $licenseInstallPath = Join-Path $installPath -ChildPath "Data\license.xml"
     Copy-Item -Path $config.InstallSettings.WebServer.LicenseFilePath -Destination $licenseInstallPath
 
-    Write-Message $config "File copying done!" "White"
+    Write-Message $config "File copying done!" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
 }
 
 function Get-DatabaseNames([xml]$config)
@@ -1009,14 +1022,14 @@ function Attach-SitecoreDatabase([xml]$config, [string]$databaseName, [Microsoft
 
     if (!(Get-ConfigOption $config "Database/InstallDatabase"))
     {
-        Write-Message $config "Skipping database attach: InstallDatabase option is false" "White"
+        Write-Message $config "Skipping database attach: InstallDatabase option is false" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
         return $fullDatabaseName
     }
 
     if ($sqlServerSmo.databases[$fullDatabaseName] -eq $null)
     {
         $message = "Attaching database $fullDatabaseName to " + $sqlServerSmo.Name
-        Write-Message $config $message "White"
+        Write-Message $config $message "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
 
         # Get paths of the data and log file
         $dbFolderPath = Get-DatabaseInstallFolderPath $config $TRUE
@@ -1039,13 +1052,13 @@ function Attach-SitecoreDatabase([xml]$config, [string]$databaseName, [Microsoft
         }
         catch
         {
-            Write-Message $config $_.Exception "Red"
+            Write-Message $config $_.Exception "Red" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
         }
     }
     else
     {
         $message = "Database $fullDatabaseName already exists on " + $sqlServerSmo.Name
-        Write-Message $config $message "Yellow"
+        Write-Message $config $message "Yellow" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     }
 
     return $fullDatabaseName
@@ -1059,7 +1072,7 @@ function Set-DatabaseRoles([xml]$config, [string]$databaseName, [Microsoft.SqlSe
     $database = $sqlServerSmo.Databases[$databaseName]
     if ($database.Users[$loginName])
     {
-        Write-Message $config "Dropping user from $database" "Yellow"
+        Write-Message $config "Dropping user from $database" "Yellow" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
         $database.Users[$loginName].Drop()
     }
     $dbUser = New-Object -TypeName Microsoft.SqlServer.Management.Smo.User -ArgumentList $database, $loginName
@@ -1080,7 +1093,7 @@ function Set-DatabaseRoles([xml]$config, [string]$databaseName, [Microsoft.SqlSe
     # Assign database roles user
     foreach ($roleName in $roles)
     {
-        Write-Message $config "Adding $roleName role for $loginName on $database" "White"
+        Write-Message $config "Adding $roleName role for $loginName on $database" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
         $dbrole = $database.Roles[$roleName]
         $dbrole.AddMember($loginName)
         $dbrole.Alter | Out-Null
@@ -1097,7 +1110,7 @@ function Grant-DatabasePermissions([xml]$config, [string]$databaseName, [Microso
     $database.Grant($permset, $loginName)
     $database.Alter();
 
-    Write-Message $config "Granted Execute permission to $loginName on $database" "White"
+    Write-Message $config "Granted Execute permission to $loginName on $database" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
 }
 
 function Set-DatabaseGrowth([xml]$config, [string]$databaseName, [Microsoft.SqlServer.Management.Smo.Server]$sqlServerSmo)
@@ -1106,7 +1119,7 @@ function Set-DatabaseGrowth([xml]$config, [string]$databaseName, [Microsoft.SqlS
     $database = $sqlServerSmo.Databases[$fullDatabaseName]
     [int]$growthsize = $config.InstallSettings.WebServer.CMServerSettings.Publishing.Parallel.WebDatabaseAutoGrowthInMB
 
-    Write-Message $config "Setting Autogrowth size for $fullDatabaseName to $($growthsize)MB" "White"
+    Write-Message $config "Setting Autogrowth size for $fullDatabaseName to $($growthsize)MB" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
 
     foreach ($file in $database.FileGroups.Files)
     {
@@ -1125,7 +1138,7 @@ function Set-DatabaseGrowth([xml]$config, [string]$databaseName, [Microsoft.SqlS
 
 function Initialize-SitecoreDatabases([xml]$config)
 {
-    Write-Message $config "`nInitializing Sitecore Databases..." "Green"
+    Write-Message $config "`nInitializing Sitecore Databases..." "Green" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
 
     [Microsoft.SqlServer.Management.Smo.Server]$sqlServerSmo = Get-SqlServerSmo $config
 
@@ -1150,7 +1163,7 @@ function Initialize-SitecoreDatabases([xml]$config)
         Set-DatabaseGrowth $config $webDbName $sqlServerSmo
     }
 
-    Write-Message $config "Database initialization complete!" "White"
+    Write-Message $config "Database initialization complete!" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
 }
 
 function Set-ApplicationPoolIdentity([xml]$config, $pool)
@@ -1173,7 +1186,7 @@ function Set-ApplicationPoolIdentity([xml]$config, $pool)
         $identityName = "IIS APPPOOL\$appPoolName"
     }
 
-    Write-Message $config "Identity of application pool is $identityName" "White"
+    Write-Message $config "Identity of application pool is $identityName" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
 }
 
 function Add-IpRestrictionsToTarget([xml]$config, [string]$target, [string]$iisSiteName)
@@ -1186,13 +1199,13 @@ function Add-IpRestrictionsToTarget([xml]$config, [string]$target, [string]$iisS
  
     Set-WebConfigurationProperty -PSPath $pspath -Filter $filter -Name $propertyName -Value $propertyValue -Location $location
 
-    Write-Message $config "Denying all unspecified clients for $target" "White"
+    Write-Message $config "Denying all unspecified clients for $target" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
 
     $whiteList = $config.InstallSettings.WebServer.IPWhiteList
     foreach ($ip in $whiteList.IP)
     {
         Add-WebConfiguration -pspath $pspath -filter $filter -value @{ipAddress=$ip;allowed="true"} -Location $location
-        Write-Message $config "$ip added to IP whitelist for $target" "White"
+        Write-Message $config "$ip added to IP whitelist for $target" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     }
 }
 
@@ -1207,7 +1220,7 @@ function Set-IpRestrictions([xml]$config, [string]$iisSiteName)
 
 function Initialize-WebSite([xml]$config)
 {
-    Write-Message $config "`nInitializing site in IIS..." "Green"
+    Write-Message $config "`nInitializing site in IIS..." "Green" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
 
     $siteName = $config.InstallSettings.WebServer.IISWebSiteName
 
@@ -1215,11 +1228,11 @@ function Initialize-WebSite([xml]$config)
     $appPoolName = $siteName + "AppPool"
     if(Test-Path IIS:\AppPools\$appPoolName)
     {
-        Write-Message $config "Application pool named $appPoolName already exists" "Yellow"
+        Write-Message $config "Application pool named $appPoolName already exists" "Yellow" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     }
     else
     {
-        Write-Message $config "Provisioning new application pool in IIS - $appPoolName" "White"
+        Write-Message $config "Provisioning new application pool in IIS - $appPoolName" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
         New-WebAppPool -Name $appPoolName -force | Out-Null
 
         $pool = Get-Item IIS:\AppPools\$appPoolName
@@ -1234,7 +1247,7 @@ function Initialize-WebSite([xml]$config)
             [int]$timeout = $config.InstallSettings.WebServer.CMServerSettings.Publishing.AppPoolIdleTimeout
             if ($timeout -gt $pool.recycling.periodicRestart.time.TotalMinutes)
             {
-                Write-Message $config "AppPoolIdleTimeout of $timeout minutes cannot be greater than the app pool's periodic restart time, using $($pool.recycling.periodicRestart.time.TotalMinutes) minutes instead." "Yellow"
+                Write-Message $config "AppPoolIdleTimeout of $timeout minutes cannot be greater than the app pool's periodic restart time, using $($pool.recycling.periodicRestart.time.TotalMinutes) minutes instead." "Yellow" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
                 $timeout = $pool.recycling.periodicRestart.time.TotalMinutes
             }
             $pool.processModel.idleTimeout = [TimeSpan]::FromMinutes($timeout)
@@ -1247,11 +1260,11 @@ function Initialize-WebSite([xml]$config)
     $iisSiteName = $sitename
     if(Test-Path IIS:\Sites\$iisSiteName)
     {
-        Write-Message $config  "A site named $iisSiteName already exists in IIS" "Yellow"
+        Write-Message $config  "A site named $iisSiteName already exists in IIS" "Yellow" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     }
     else
     {
-        Write-Message $config "Provisioning new IIS site name $iisSiteName" "White"
+        Write-Message $config "Provisioning new IIS site name $iisSiteName" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
         $installPath = Join-Path $config.InstallSettings.WebServer.SitecoreInstallRoot -ChildPath $config.InstallSettings.WebServer.SitecoreInstallFolder
         $sitePath = Join-Path $installPath -ChildPath "Website"        
         $bindings = $config.InstallSettings.WebServer.IISBindings.Binding
@@ -1271,27 +1284,29 @@ function Initialize-WebSite([xml]$config)
             {
                 # Add hostname(s) to hosts file
                 $hostsPath = "$env:windir\System32\drivers\etc\hosts"
+                $hostEntry = ""
                 if ($bindingIndex -eq 1)
                 {
-                    Add-Content $hostsPath "`n########################"
-                    Add-Content $hostsPath "# $siteName"
-                    Add-Content $hostsPath "########################"
+                    $hostEntry += "`n########################"
+                    $hostEntry += "`n# $siteName"
+                    $hostEntry += "`n########################"
                 }
 
-                Write-Message $config "Add $($binding.HostHeader) to hosts file" "White"
+                Write-Message $config "Add $($binding.HostHeader) to hosts file" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
                 $ip = $binding.IP
                 if ($ip -eq "*")
                 {
                     $ip = "127.0.0.1"
                 }
-                Add-Content $hostsPath "$ip $($binding.HostHeader)"
+                $hostEntry += "`n$ip $($binding.HostHeader)"
+                Add-Content $hostsPath $hostEntry
             }
 
             $bindingIndex++
         }
     }
 
-    Write-Message $config "IIS site initialization complete!" "White"
+    Write-Message $config "IIS site initialization complete!" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
 
     return $iisSiteName
 }
@@ -1499,9 +1514,7 @@ function Get-FilesToDisableOnCDServer([xml]$config)
 
 function Disable-FilesForCDServer([xml]$config)
 {
-    $writeToLogOnly = $TRUE
-
-    Write-Message $config "Disabling files not needed on CD server." "White"
+    Write-Message $config "Disabling files not needed on CD server." "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     foreach ($file in Get-FilesToDisableOnCDServer $config)
     {        
         if (Test-Path $file)
@@ -1509,11 +1522,11 @@ function Disable-FilesForCDServer([xml]$config)
             $fileName = Split-Path $file -leaf
             $newName = $fileName + ".disabled"
             Rename-Item -Path $file -NewName $newName
-            Write-Message $config "Disabled: $file" "White" $writeToLogOnly
+            Write-Message $config "Disabled: $file" "White" -WriteToLogOnly $TRUE -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
         }
         else
         {
-            Write-Message $config "File not found on server: $file" "Yellow" $writeToLogOnly
+            Write-Message $config "File not found on server: $file" "Yellow" -WriteToLogOnly $TRUE -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
         }
     }
 }
@@ -1565,11 +1578,9 @@ function Get-FilesToEnableOnCDServer([xml]$config)
 
 function Enable-FilesForCDServer([xml]$config)
 {
-    Write-Message $config "Enabling files required by a CD server." "White"
+    Write-Message $config "Enabling files required by a CD server." "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     foreach ($fileToEnable in Get-FilesToEnableOnCDServer $config)
     {
-        $writeToLogOnly = $TRUE
-
         if (Test-Path $fileToEnable)
         {
             # Do nothing, file is already enabled.
@@ -1610,11 +1621,11 @@ function Enable-FilesForCDServer([xml]$config)
             }
 
             Copy-Item -Path $match -Destination $fileToEnable
-            Write-Message $config "Enabled: $fileToEnable" "White" $writeToLogOnly
+            Write-Message $config "Enabled: $fileToEnable" "White" -WriteToLogOnly $TRUE -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
         }
         else
         {
-            Write-Message $config "File not found on server: $fileToEnable" "Yellow" $writeToLogOnly
+            Write-Message $config "File not found on server: $fileToEnable" "Yellow" -WriteToLogOnly $TRUE -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
         }
     }
 }
@@ -1638,11 +1649,9 @@ function Get-FilesToEnableOnPublishingServer([xml]$config)
 
 function Enable-FilesForPublishingServer([xml]$config)
 {
-    Write-Message $config "Enabling files required by a Publishing server." "White"
+    Write-Message $config "Enabling files required by a Publishing server." "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     foreach ($file in Get-FilesToEnableOnPublishingServer $config)
     {
-        $writeToLogOnly = $TRUE
-
         if (Test-Path $file)
         {
             # Do nothing, file is already enabled.
@@ -1689,18 +1698,18 @@ function Enable-FilesForPublishingServer([xml]$config)
             }
 
             Copy-Item -Path $match -Destination $file
-            Write-Message $config "Enabled: $file" "White" $writeToLogOnly
+            Write-Message $config "Enabled: $file" "White" -WriteToLogOnly $TRUE -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
         }
         else
         {
-            Write-Message $config "File not found on server: $file" "Yellow" $writeToLogOnly
+            Write-Message $config "File not found on server: $file" "Yellow" -WriteToLogOnly $TRUE -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
         }        
     }
 }
 
 function Set-ConfigurationFiles([xml]$config)
 {
-    Write-Message $config "`nWriting changes to config files..." "Green"
+    Write-Message $config "`nWriting changes to config files..." "Green" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
 
     [decimal]$sitecoreVersion = Get-SitecoreVersion $config
     $backupFiles = New-Object 'System.Collections.Generic.List[string]'
@@ -1713,7 +1722,7 @@ function Set-ConfigurationFiles([xml]$config)
         $sitecoreConfigPath = Join-Path $installPath -ChildPath "Website\App_Config\sitecore.config"
         $sitecoreConfig = [xml](Get-Content $sitecoreConfigPath)
         $backup = $sitecoreConfigPath + "__$currentDate"
-        Write-Message $config "Backing up sitecore.config" "White"
+        Write-Message $config "Backing up sitecore.config" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
         $sitecoreConfig.Save($backup)
         $backupFiles.Add($backup)
 
@@ -1721,7 +1730,7 @@ function Set-ConfigurationFiles([xml]$config)
         $dataFolderPath = Join-Path $installPath -ChildPath "Data"
         $sitecoreConfig.SelectSingleNode("sitecore/sc.variable[@name='dataFolder']").SetAttribute("value", $dataFolderPath)
 
-        Write-Message $config "Saving sitecore.config" "White"
+        Write-Message $config "Saving sitecore.config" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
         $sitecoreConfig.Save($sitecoreConfigPath)
     }
     #endregion
@@ -1730,7 +1739,7 @@ function Set-ConfigurationFiles([xml]$config)
     $webConfigPath = Join-Path $installPath -ChildPath "Website\web.config"
     $webconfig = [xml](Get-Content $webConfigPath)
     $backup = $webConfigPath + "__$currentDate"
-    Write-Message $config "Backing up Web.config" "White"
+    Write-Message $config "Backing up Web.config" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     $webconfig.Save($backup)
     $backupFiles.Add($backup)
 
@@ -1745,7 +1754,7 @@ function Set-ConfigurationFiles([xml]$config)
     {
         $webconfig.configuration.SelectSingleNode("system.web/sessionState").SetAttribute("mode", "Custom")
         $webconfig.configuration.SelectSingleNode("system.web/sessionState").SetAttribute("customProvider", "mssql")
-        Write-Message $config "Changing private session state provider to MSSQL" "White"
+        Write-Message $config "Changing private session state provider to MSSQL" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     }
 
     # Disable Sitecore's Upload Watcher
@@ -1755,7 +1764,7 @@ function Set-ConfigurationFiles([xml]$config)
         $node.ParentNode.InnerXml = $node.ParentNode.InnerXml.Replace($node.OuterXml, $node.OuterXml.Insert(0, "<!--").Insert($node.OuterXml.Length+4, "-->"))
     }
 
-    Write-Message $config "Saving changes to Web.config" "White"
+    Write-Message $config "Saving changes to Web.config" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     $webconfig.Save($webConfigPath)
     #endregion
 
@@ -1763,7 +1772,7 @@ function Set-ConfigurationFiles([xml]$config)
     $connectionStringsPath = Join-Path $installPath -ChildPath "Website\App_Config\ConnectionStrings.config"
     $connectionStringsConfig = [xml](Get-Content $connectionStringsPath)
     $backup = $connectionStringsPath + "__$currentDate"
-    Write-Message $config "Backing up ConnectionStrings.config" "White"
+    Write-Message $config "Backing up ConnectionStrings.config" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     $connectionStringsConfig.Save($backup)
     $backupFiles.Add($backup)
 
@@ -1796,7 +1805,7 @@ function Set-ConfigurationFiles([xml]$config)
         $dbElement.Attributes.Append($dbAttr) | Out-Null
 
         $connectionStringsConfig.DocumentElement.AppendChild($dbElement) | Out-Null
-        Write-Message $config "Addedd a $($copy.Trim()) connection string" "White"
+        Write-Message $config "Addedd a $($copy.Trim()) connection string" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     }
 
     # Optionally add a session connection string
@@ -1813,7 +1822,7 @@ function Set-ConfigurationFiles([xml]$config)
         $sessionElement.Attributes.Append($sessionAttr) | Out-Null
 
         $connectionStringsConfig.DocumentElement.AppendChild($sessionElement) | Out-Null
-        Write-Message $config "Addedd a session connection string" "White"
+        Write-Message $config "Addedd a session connection string" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     }
 
     # Modify MongoDB connection strings
@@ -1866,7 +1875,7 @@ function Set-ConfigurationFiles([xml]$config)
             $node.SetAttribute("connectionString", $connectionString)
         }
 
-        Write-Message $config "Changing host name for MongoDb connection strings" "White"
+        Write-Message $config "Changing host name for MongoDb connection strings" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     }
 
     # Comment out connection strings not needed by CD server
@@ -1881,10 +1890,10 @@ function Set-ConfigurationFiles([xml]$config)
         $node = $connectionStringsConfig.SelectSingleNode("connectionStrings/add[@name='reporting']")
         $node.ParentNode.InnerXml = $node.ParentNode.InnerXml.Replace($node.OuterXml, $node.OuterXml.Insert(0, "<!--").Insert($node.OuterXml.Length+4, "-->"))
 
-        Write-Message $config "Commenting out connection strings not need on CD server" "White"
+        Write-Message $config "Commenting out connection strings not need on CD server" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     }
 
-    Write-Message $config "Saving ConnectionStrings.config" "White"
+    Write-Message $config "Saving ConnectionStrings.config" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     $connectionStringsConfig.Save($connectionStringsPath)
     #endregion
 
@@ -1894,11 +1903,11 @@ function Set-ConfigurationFiles([xml]$config)
         $trackerPath = Join-Path $installPath -ChildPath "Website\App_Config\Include\Sitecore.Analytics.Tracking.config"
         $trackerConfig = [xml](Get-Content $trackerPath)
         $backup = $trackerPath + "__$currentDate"
-        Write-Message $config "Backing up Sitecore.Analytics.Tracker.config" "White"
+        Write-Message $config "Backing up Sitecore.Analytics.Tracker.config" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
         $trackerConfig.Save($backup)
         $backupFiles.Add($backup)
 
-        Write-Message $config "Changing shared session state provider to MSSQL" "White"
+        Write-Message $config "Changing shared session state provider to MSSQL" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
         $trackerConfig.configuration.SelectSingleNode("sitecore/tracking/sharedSessionState").SetAttribute("defaultProvider", "mssql")
 
         # Delete existing mssql provider if it exists
@@ -1943,7 +1952,7 @@ function Set-ConfigurationFiles([xml]$config)
         # Set sharedSessionState's defaultProvider to mssql
         $node = $trackerConfig.configuration.SelectSingleNode("sitecore/tracking/sharedSessionState").SetAttribute("defaultProvider", "mssql")
 
-        Write-Message $config "Saving changes to Sitecore.Analytics.Tracker.config" "White"
+        Write-Message $config "Saving changes to Sitecore.Analytics.Tracker.config" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
         $trackerConfig.Save($trackerPath)
     }
     #endregion
@@ -1955,14 +1964,14 @@ function Set-ConfigurationFiles([xml]$config)
         $solrConfig = [xml](Get-Content $solrConfigPath)
         $currentDate = (Get-Date).ToString("yyyyMMdd_hh-mm-s")
         $backup = $solrConfigPath + "__$currentDate"
-        Write-Message $config "Backing up Sitecore.ContentSearch.Solr.DefaultIndexConfiguration.config.example" "White"
+        Write-Message $config "Backing up Sitecore.ContentSearch.Solr.DefaultIndexConfiguration.config.example" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
         $solrConfig.Save($backup)
         $backupFiles.Add($backup)
 
         $solrConfig.configuration.SelectSingleNode("sitecore/settings/setting[@name='ContentSearch.Solr.ServiceBaseAddress']").SetAttribute("value", $config.InstallSettings.WebServer.Solr.ServiceBaseAddress)
-        Write-Message $config "Changing Solr ServiceBaseAddress" "White"
+        Write-Message $config "Changing Solr ServiceBaseAddress" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
 
-        Write-Message $config "Saving Sitecore.ContentSearch.Solr.DefaultIndexConfiguration.config.example" "White"
+        Write-Message $config "Saving Sitecore.ContentSearch.Solr.DefaultIndexConfiguration.config.example" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
         $solrConfig.Save($solrConfigPath)
     }
     #endregion
@@ -1987,7 +1996,7 @@ function Set-ConfigurationFiles([xml]$config)
             $match = Get-Item ($scalabilityConfigPath + ".*") | Select-Object -First 1
 
             Copy-Item -Path $match -Destination $scalabilityConfigPath
-            Write-Message $config "Enabled: $scalabilityConfigPath" "White"
+            Write-Message $config "Enabled: $scalabilityConfigPath" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
         }
 
         # Edit ScalabilitySettings.config
@@ -1995,12 +2004,12 @@ function Set-ConfigurationFiles([xml]$config)
         $scalabilityConfig = [xml](Get-Content $scalabilityConfigPath)
         $currentDate = (Get-Date).ToString("yyyyMMdd_hh-mm-s")
         $backup = $scalabilityConfigPath + "__$currentDate"
-        Write-Message $config "Backing up ScalabilitySettings.config" "White"
+        Write-Message $config "Backing up ScalabilitySettings.config" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
         $scalabilityConfig.Save($backup)
         $backupFiles.Add($backup)
         $instanceName = $config.InstallSettings.WebServer.CMServerSettings.InstanceName
         $scalabilityConfig.configuration.SelectSingleNode("sitecore/settings/setting[@name='InstanceName']").ChildNodes[0].InnerText = $instanceName
-        Write-Message $config "Saving changes to ScalabilitySettings.config" "White"
+        Write-Message $config "Saving changes to ScalabilitySettings.config" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
         $scalabilityConfig.Save($scalabilityConfigPath)
 
         if (Test-PublishingServerRole $config)
@@ -2010,7 +2019,7 @@ function Set-ConfigurationFiles([xml]$config)
             # Edit ScalabilitySettings.config
             $publishingInstanceName = $config.InstallSettings.WebServer.CMServerSettings.Publishing.PublishingInstance
             $scalabilityConfig.configuration.SelectSingleNode("sitecore/settings/setting[@name='Publishing.PublishingInstance']").ChildNodes[0].InnerText = $publishingInstanceName
-            Write-Message $config "Saving changes to ScalabilitySettings.config" "White"
+            Write-Message $config "Saving changes to ScalabilitySettings.config" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
             $scalabilityConfig.Save($scalabilityConfigPath)
 
             if (Get-ConfigOption $config "WebServer/CMServerSettings/Publishing/Parallel/enabled" $TRUE)
@@ -2020,19 +2029,19 @@ function Set-ConfigurationFiles([xml]$config)
                 $parallelConfig = [xml](Get-Content $parallelConfigPath)
                 $currentDate = (Get-Date).ToString("yyyyMMdd_hh-mm-s")
                 $backup = $parallelConfigPath + "__$currentDate"
-                Write-Message $config "Backing up Sitecore.Publishing.Parallel.config" "White"
+                Write-Message $config "Backing up Sitecore.Publishing.Parallel.config" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
                 $parallelConfig.Save($backup)
                 $backupFiles.Add($backup)
                 $maxDegrees = $config.InstallSettings.WebServer.CMServerSettings.Publishing.Parallel.MaxDegreesOfParallelism
                 $parallelConfig.configuration.SelectSingleNode("sitecore/settings/setting[@name='Publishing.MaxDegreeOfParallelism']").ChildNodes[0].InnerText = $maxDegrees
-                Write-Message $config "Saving changes to Sitecore.Publishing.Parallel.config" "White"
+                Write-Message $config "Saving changes to Sitecore.Publishing.Parallel.config" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
                 $parallelConfig.Save($parallelConfigPath)
             }
         }
     }
     #endregion
 
-    Write-Message $config "Modifying config files complete!" "White"
+    Write-Message $config "Modifying config files complete!" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     return $backupFiles
 }
 
@@ -2042,7 +2051,7 @@ function Set-AclForFolder([string]$userName, [string]$permission, [string]$folde
     $rule = New-Object System.Security.AccessControl.FileSystemAccessRule($userName, $permission, "ContainerInherit,ObjectInherit", "None", "Allow")
     $acl.SetAccessRule($rule)
     Set-Acl $folderPath $acl
-    Write-Message $config "Added $userName to ACL ($permission) for $folderPath" "White"
+    Write-Message $config "Added $userName to ACL ($permission) for $folderPath" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
 }
 
 function Confirm-IsUserMemberOfLocalGroup([string]$groupName, [string]$userName)
@@ -2084,13 +2093,13 @@ function Add-AppPoolIdentityToLocalGroup([xml]$config, [string]$groupName, [stri
 
     if (Confirm-IsUserMemberOfLocalGroup $groupName $userName)
     {
-        Write-Message $config "$userName is already a member of $groupName" "White"
+        Write-Message $config "$userName is already a member of $groupName" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     }
     else
     {
         $group = [ADSI]"WinNT://$env:COMPUTERNAME/$groupName,group"
         $group.Add("WinNT://$domain/$userName,user")
-        Write-Message $config "$userName added a member of $groupName" "White"
+        Write-Message $config "$userName added a member of $groupName" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     }
 }
 
@@ -2121,25 +2130,25 @@ function Set-FileSystemPermissions([xml]$config, [string]$iisSiteName)
 
 function Block-AnonymousUsers([xml]$config, [string]$iisSiteName)
 {
-    Write-Message $config "Blocking anonymous access to sensitive folders on CD server." "White"
+    Write-Message $config "Blocking anonymous access to sensitive folders on CD server." "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     $filter = "/system.WebServer/security/authentication/anonymousAuthentication"
     $folderList = @("/App_Config", "/sitecore/admin", "/sitecore/debug", "/sitecore/shell/WebService")
     foreach ($folder in $folderList)
     {
         Set-WebConfigurationProperty -Filter $filter -PSPath IIS:\ -Name enabled -Location "$iisSiteName$folder" -Value false
-        Write-Message $config "Blocked folder: $folder" "White" $TRUE
+        Write-Message $config "Blocked folder: $folder" "White" -WriteToLogOnly $TRUE -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     }
 }
 
 function Revoke-ExecutePermission([xml]$config, [string]$iisSiteName, [string]$folderPath)
 {
-    Write-Message $config "Denying execute permission on the $folderPath folder." "White"
+    Write-Message $config "Denying execute permission on the $folderPath folder." "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     Set-WebConfigurationProperty /system.WebServer/handlers "IIS:\sites\$iisSiteName\$folderPath" -Name accessPolicy -value "Read"
 }
 
 function Set-SecuritySettings([xml]$config, [string]$iisSiteName)
 {
-    Write-Message $config "`nApplying recommended security settings..." "Green"
+    Write-Message $config "`nApplying recommended security settings..." "Green" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
 
     Set-FileSystemPermissions $config $iisSiteName
 
@@ -2165,7 +2174,7 @@ function Set-SecuritySettings([xml]$config, [string]$iisSiteName)
         }
     }
     
-    Write-Message $config "Security settings complete!" "White"
+    Write-Message $config "Security settings complete!" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
 }
 
 function Get-SiteUrl([xml]$config)
@@ -2196,33 +2205,34 @@ function Get-SiteUrl([xml]$config)
 function Start-Browser([string]$siteUrl)
 {
     $siteUrl = Get-SiteUrl $config
-    Write-Host "`nLaunching site in browser: $siteUrl"
+    Write-Message $null "`nLaunching site in browser: $siteUrl" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
     $ie = new-object -comobject "InternetExplorer.Application" 
     $ie.visible = $true
     $ie.navigate($siteUrl)
 }
 
-function Install-SitecoreApplication([string]$configPath)
+function Install-SitecoreApplication([string]$configPath, [bool]$SuppressOutputToScreen=$FALSE)
 {
+    $hostScreenAvailable = !$SuppressOutputToScreen
     $deleteBackupFiles = $TRUE
 
     if (!(Test-PreRequisites))
     {
-        Write-Host "Aborting Install: Please satisfy pre-requisites and try again." -ForegroundColor Red
+        Write-Message $null "Aborting Install: Please satisfy pre-requisites and try again." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
         return
     }
     
     [xml]$config = Read-InstallConfigFile $configPath
     if ($config -eq $null)
     {
-        Write-Host "Aborting install." -ForegroundColor Red
+        Write-Message $null "Aborting install." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
         return
     }
 
     $configIsValid = Confirm-ConfigurationSettings $config
     if (!$configIsValid)
     {
-        Write-Host "Aborting install: config.xml file has a bad setting." -ForegroundColor Red
+        Write-Message $null "Aborting install: config.xml file has a bad setting." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
         return
     }
 
@@ -2235,8 +2245,8 @@ function Install-SitecoreApplication([string]$configPath)
 
     $stopWatch = [Diagnostics.Stopwatch]::StartNew()
     $date = Get-Date    
-    $message = "Starting Sitecore install [version $(Get-SitecoreVersion $config $TRUE $TRUE)] - $date" 
-    Write-Message $config $message "Green"
+    $message = "Starting Sitecore install [Kernel version $(Get-SitecoreVersion $config $TRUE $TRUE)] - $date" 
+    Write-Message $config $message "Green" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
 
     if (Get-ConfigOption $config "WebServer/CMServerSettings/enabled" $TRUE)
     {
@@ -2250,14 +2260,14 @@ function Install-SitecoreApplication([string]$configPath)
     {
         $role = "CD"
     }
-    Write-Message $config "Configuring server for [$role] role." "White"
+    Write-Message $config "Configuring server for [$role] role." "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
 
     try
     {
         $loginName = $config.InstallSettings.Database.SqlLoginForInstall
-        Write-Message $config "Using $loginName as the SQL login during installation" "White"
+        Write-Message $config "Using $loginName as the SQL login during installation" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
         $loginName = Get-SqlLoginAccountForDataAccess $config
-        Write-Message $config "Using $loginName as the SQL login for data access" "White"
+        Write-Message $config "Using $loginName as the SQL login for data access" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
 
         Copy-SitecoreFiles $config
 
@@ -2271,8 +2281,8 @@ function Install-SitecoreApplication([string]$configPath)
     }
     catch [Exception]
     {
-        Write-Message $config  ($_.Exception.Message) "Red"
-        Write-Message $config "Aborting install." "Red"
+        Write-Message $config  ($_.Exception.Message) "Red" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        Write-Message $config "Aborting install." "Red" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
         $deleteBackupFiles = $FALSE
     }
     finally
@@ -2284,10 +2294,10 @@ function Install-SitecoreApplication([string]$configPath)
 
         $stopWatch.Stop()
         $message = "`nSitecore install finished - Elapsed time {0}:{1:D2} minute(s)" -f $stopWatch.Elapsed.Minutes, $stopWatch.Elapsed.Seconds
-        Write-Message $config $message "Green"
+        Write-Message $config $message "Green" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
 
         Start-Browser $config
     }
 }
 
-Install-SitecoreApplication $configPath
+Install-SitecoreApplication $configPath -SuppressOutputToScreen $FALSE
