@@ -1,21 +1,16 @@
 # Specify a path to the .config file if you do not wish to put the .config file in the same directory as the script
 $configPath = ""
 $scriptDir = Split-Path (Resolve-Path $myInvocation.MyCommand.Path)
+$configSettings = $null
 # Assume there is no host console available until we can read the config file.
 $hostScreenAvailable = $FALSE
 
-function Write-Message([xml]$config, [string]$Message, [string]$MessageColor="White", [bool]$WriteToLogOnly=$FALSE, [bool]$WriteToLog=$FALSE, [bool]$HostConsoleAvailable=$FALSE)
+#region Utility Functions
+function Write-Message([string]$Message, [string]$MessageColor="White", [bool]$WriteToLogOnly=$FALSE, [bool]$WriteToLog=$FALSE, [bool]$HostConsoleAvailable=$FALSE)
 {
-    if ($config -ne $null)
+    if (!([string]::IsNullOrEmpty($script:configSettings.SitecoreLogPath)) -and $WriteToLog)
     {
-        $installPath = Join-path $config.InstallSettings.WebServer.SitecoreInstallRoot -ChildPath $config.InstallSettings.WebServer.SitecoreInstallFolder
-        $logFileName = $config.InstallSettings.LogFileName
-        $logPath = Join-path $installPath -ChildPath $logFileName
-    }
-
-    # Write message to log file
-    if (!([string]::IsNullOrEmpty($logFileName)) -and $WriteToLog)
-    {
+        # Write message to log file
         Add-Content $logPath $Message
     }
 
@@ -36,67 +31,12 @@ function Write-Message([xml]$config, [string]$Message, [string]$MessageColor="Wh
 
 function Remove-BackupFiles([System.Collections.Generic.List[string]]$backupFiles)
 {
-    Write-Message $config "`nDeleting backed up files..." "Green" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+    Write-Message "`nDeleting backed up files..." "Green" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     foreach ($file in $backupFiles)
     {
         Remove-Item $file
     }
-    Write-Message $config "Removed back ups!" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
-}
-
-function Test-Module([string]$name)
-{
-    if(-not(Get-Module -name $name))
-    {
-        if(Get-Module -ListAvailable | Where-Object { $_.name -eq $name })
-        {
-            Write-Message $null "Importing $name module." "Gray" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
-            Import-Module -Name $name -DisableNameChecking
-            Write-Message $null "`n" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
-            $TRUE
-        }
-        else
-        {
-            $FALSE
-        } 
-    }
-    else
-    {
-        Write-Message $null "$name module is already imported.`n" "Gray" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
-        $TRUE
-    }
-}
-
-function Test-PreRequisites
-{
-    Write-Message $null "Testing script pre-requisites." "Gray" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
-
-    $currentPrincipal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
-    if (!($currentPrincipal.IsInRole( [Security.Principal.WindowsBuiltInRole]::Administrator )))
-    {
-        Write-Message $null "Warning: PowerShell must run as an Administrator." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
-        return $FALSE
-    }
-
-    $moduleName = "SQLPS"
-    if (!(Test-Module $moduleName))
-    {
-        Write-Message $null "Warning: SQL PowerShell Module ($moduleName) is not installed." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
-        return $FALSE
-    }
-    else
-    {
-        Set-Location -Path $scriptDir
-    }
-
-    $moduleName = "WebAdministration"
-    if (!(Test-Module $moduleName))
-    {
-        Write-Message $null "Warning: IIS PowerShell Module ($moduleName) is not installed." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
-        return $FALSE
-    }
-
-    return $TRUE
+    Write-Message "Removed back ups!" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
 }
 
 function Read-InstallConfigFile([string]$configPath)
@@ -113,7 +53,7 @@ function Read-InstallConfigFile([string]$configPath)
         }
         else
         {
-            Write-Message $null "Could not find configuration file at specified path: $confgPath" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+            Write-Message "Could not find configuration file at specified path: $confgPath" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
         }
     }
 
@@ -133,7 +73,7 @@ function Get-ConfigOption([xml]$config, [string]$optionName, [bool]$isAttribute=
 
         if ($node -ne $null)
         {
-            $attributeValue = $node.GetAttribute($attributeName)
+            $attributeValue = $node.GetAttribute($attributeName).Trim()
             if (!([string]::IsNullOrEmpty($attributeValue)))
             {
                 $optionValue = [System.Convert]::ToBoolean($attributeValue)
@@ -142,7 +82,7 @@ function Get-ConfigOption([xml]$config, [string]$optionName, [bool]$isAttribute=
     }
     else
     {
-        $nodeValue = $config.InstallSettings.SelectSingleNode($optionName).InnerText
+        $nodeValue = $config.InstallSettings.SelectSingleNode($optionName).InnerText.Trim()
         if (!([string]::IsNullOrEmpty($nodeValue)))
         {
             $optionValue = [System.Convert]::ToBoolean($nodeValue)
@@ -152,262 +92,76 @@ function Get-ConfigOption([xml]$config, [string]$optionName, [bool]$isAttribute=
     return $optionValue
 }
 
-function Get-SqlLoginAccountForDataAccess([xml]$config)
+function Get-SqlLoginAccountForDataAccess
 {
     # Top priority is Application Pool Identity
-    if (Get-ConfigOption $config "Database/UseWindowsAuthenticationForSqlDataAccess")
+    if ($script:configSettings.Database.UseWindowsAuthenticationForSqlDataAccess)
     {
-        return $config.InstallSettings.WebServer.AppPoolIdentity
+        return $script:configSettings.WebServer.AppPoolIdentity
     }
 
     # Next, use the SQL login for data access if it exists
-    if (!([string]::IsNullOrEmpty($config.InstallSettings.Database.SqlLoginForDataAccess)))
+    if (!([string]::IsNullOrEmpty($script:configSettings.Database.SqlLoginForDataAccess)))
     {
-        return $config.InstallSettings.Database.SqlLoginForDataAccess
+        return $script:configSettings.Database.SqlLoginForDataAccess
     }
 
     # Finally, use the Sql login for install, but only if it is not a domain account
-    $split = $config.InstallSettings.Database.SqlLoginForInstall.Split("\")
+    $split = $script:configSettings.Database.SqlLoginForInstall.Split("\")
     if ($split.Count -lt 2)
     {
-        return $config.InstallSettings.Database.SqlLoginForInstall
+        return $script:configSettings.Database.SqlLoginForInstall
     }
     else
     {
-        Write-Message $null "The SqlLoginForInstall is a domain account and SqlLoginForDataAccess is undefined. You must supply a value for SqlLoginForDataAccess." "Yellow" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+        Write-Message "The SqlLoginForInstall is a domain account and SqlLoginForDataAccess is undefined. You must supply a value for SqlLoginForDataAccess." "Yellow" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
     }
 
     return $null
 }
 
-function Confirm-SqlLoginConfiguration([xml]$config)
+function Get-SqlServerSmo
 {
-    $login = Get-SqlLoginAccountForDataAccess $config
-    if ($login -eq $null)
-    {
-        return $FALSE
-    }
-
-    return $TRUE
-}
-
-function Get-SqlServerSmo([xml]$config)
-{
-    $sqlServerName = $config.InstallSettings.Database.SqlServerName
+    $sqlServerName = $script:configSettings.Database.SqlServerName
     [System.Reflection.Assembly]::LoadWithPartialName('Microsoft.SqlServer.SMO') | Out-Null 
     $sqlServerSmo = New-Object -TypeName Microsoft.SqlServer.Management.Smo.Server $sqlServerName
 
     # Set authentication to use login from config
-    $split = $config.InstallSettings.Database.SqlLoginForInstall.Split("\")
+    $split = $script:configSettings.Database.SqlLoginForInstall.Split("\")
     if ($split.Count -eq 2)
     {
         # Use Windows authentication
         $sqlServerSmo.ConnectionContext.LoginSecure = $TRUE
         $sqlServerSmo.ConnectionContext.ConnectAsUser = $TRUE 
 		$sqlServerSmo.ConnectionContext.ConnectAsUserName  = $split[1]
-		$sqlServerSmo.ConnectionContext.ConnectAsUserPassword = $config.InstallSettings.Database.SqlLoginForInstallPassword
+		$sqlServerSmo.ConnectionContext.ConnectAsUserPassword = $script:configSettings.Database.SqlLoginForInstallPassword
     }
     else
     {
         # Use SQL authentication
         $sqlServerSmo.ConnectionContext.LoginSecure = $FALSE
-        $sqlServerSmo.ConnectionContext.set_Login($config.InstallSettings.Database.SqlLoginForInstall)
-        $password = ConvertTo-SecureString $config.InstallSettings.Database.SqlLoginForInstallPassword -AsPlainText -Force 
+        $sqlServerSmo.ConnectionContext.set_Login($script:configSettings.Database.SqlLoginForInstall)
+        $password = ConvertTo-SecureString $script:configSettings.Database.SqlLoginForInstallPassword -AsPlainText -Force 
         $sqlServerSmo.ConnectionContext.set_SecurePassword($password)
     }
 
     return $sqlServerSmo
 }
 
-function Confirm-MemberOfRole([string]$memberName, [string]$roleName, [Microsoft.SqlServer.Management.Smo.Server]$sqlServerSmo)
-{
-    $roleMembers = $sqlServerSmo.Roles[$roleName].EnumServerRoleMembers()
-    if ($roleMembers |  Where-Object { $memberName -contains $_ })
-    {
-        return $TRUE
-    }
-    else
-    {
-        $FALSE
-    }
-}
-
-function Confirm-SqlConnectionAndRoles([xml]$config)
-{
-    [Microsoft.SqlServer.Management.Smo.Server]$sqlServerSmo = Get-SqlServerSmo $config
-
-    try
-    {
-        # Validate SQL connection can be established
-        $sqlServerSmo.ConnectionContext.Connect()
-
-        # Validate server roles for install login: must be sysadmin
-        $memberName = $config.InstallSettings.Database.SqlLoginForInstall
-        $isSysAdmin = Confirm-MemberOfRole $memberName "sysadmin" $sqlServerSmo
-        if (!$isSysAdmin)
-        {
-            Write-Message $null "$memberName doesn't have required server roles in SQL" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
-            Write-Message $null "Grant the sysadmin role to $memberName" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
-            return $FALSE
-        }
-
-        # Validate data access login exists
-        $loginName = Get-SqlLoginAccountForDataAccess $config
-        if ($sqlServerSmo.Logins[$loginName] -eq $null)
-        {
-            Write-Message $null "Could not find a login called $loginName on SQL server" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
-            return $FALSE
-        }
-
-        return $TRUE
-    }
-    catch [Exception]
-    {
-        Write-Message $null $_.Exception "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
-        return $FALSE
-    }
-}
-
-function Get-DatabaseInstallFolderPath([xml]$config, [bool]$localPath=$TRUE)
+function Get-DatabaseInstallFolderPath([bool]$localPath=$TRUE)
 {
     if ($localPath)
     {
-        return $config.InstallSettings.Database.DatabaseInstallPath.Local
+        return $script:configSettings.Database.DatabaseInstallPath.Local
     }
 
     # Return the Local path if the Unc path does not exist
-    if ([string]::IsNullOrEmpty($config.InstallSettings.Database.DatabaseInstallPath.Unc))
+    if ([string]::IsNullOrEmpty($script:configSettings.Database.DatabaseInstallPath.Unc))
     {
-        return $config.InstallSettings.Database.DatabaseInstallPath.Local
+        return $script:configSettings.Database.DatabaseInstallPath.Local
     }
 
-    return $config.InstallSettings.Database.DatabaseInstallPath.Unc
-}
-
-function Confirm-SqlInstallPath([xml]$config)
-{
-    # Check that path exists
-    $dbInstallPath = Get-DatabaseInstallFolderPath $config $FALSE
-    if (Test-Path $dbInstallPath)
-    {
-        # Check that SQL has correct rights over install path, else Database Attach will fail
-        [Microsoft.SqlServer.Management.Smo.Server]$sqlServerSmo = Get-SqlServerSmo $config        
-        $user = $sqlServerSmo.SqlDomainGroup
-        $acl = Get-Acl $dbInstallPath
-        $isCorrectRights = $acl.Access | Where {($_.IdentityReference -eq $user) -and ($_.FileSystemRights -eq "FullControl")}
-        if($isCorrectRights)
-        {
-            return $TRUE
-        }  
-        else
-        {
-            Write-Message $null "SQL doesn't appear to have enough rights for the install path." "Yellow" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
-            Write-Message $null "This might be because SQL is using builtin virtual service accounts, which are local accounts that exist on a different server than the Sitecore server. If this is true, you may IGNORE this message." "Yellow" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
-            Write-Message $null "Ensure that the SQL service for your SQL instance has FullControl of $dbInstallPath" "Yellow" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
-            Write-Message $null "Failure to do so will PREVENT the databases from attaching.`n" "Yellow" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
-
-            if (Get-ConfigOption $config "SuppressPrompts")
-            {
-                return $TRUE
-            }
-            else
-            {
-                $shell = new-object -comobject "WScript.Shell"
-                $result = $shell.popup("Do you wish to proceed?",0,"Question",4+32)
-                # $result will be 6 for yes, 7 for no.
-                if ($result -eq 6)
-                {
-                    return $TRUE
-                }
-            }
-        }
-    }
-    else
-    {
-        Write-Message $null "Path does not exist: $dbInstallPath" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
-    }
-
-    return $FALSE
-}
-
-function Confirm-WebDatabseCopyNames([xml]$config)
-{
-    $dbCopies = $config.InstallSettings.Database.WebDatabaseCopies
-
-    if ($dbCopies.copy.Count -ne ($dbCopies.copy | select -Unique).Count)
-    {
-        Write-Message $null "The name of a web database copy was used more than once in the config file." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
-        return $FALSE
-    }
-
-    if ($dbCopies.copy -contains "web")
-    {
-        Write-Message $null "Cannot use 'web' (name is case-insensitive) as the name of a web database copy." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
-        return $FALSE
-    }
-
-    return $TRUE
-}
-
-function Confirm-IISBindings([xml]$config)
-{
-    $bindings = $config.InstallSettings.WebServer.IISBindings.Binding
-    foreach ($binding in $bindings)
-    {
-        if ($binding.IP.Length -eq 0)
-        {
-            Write-Message $null "Binding must contain a non-empty IP attribute." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
-            return $FALSE
-        }
-
-        if ($binding.IP -ne "*" -and !([bool]($binding.IP -as [ipaddress])))
-        {
-            Write-Message $null "Binding's IP attribute must either be a valid IP or the '*' character." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
-            return $FALSE
-        }
-
-        if ($binding.Port.Length -eq 0)
-        {
-            Write-Message $null "Binding must contain a non-empty Port attribute." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
-            return $FALSE
-        }
-
-        try
-        {
-            [int]$port = $binding.Port
-            if ($port -lt 1 -or $port -gt 65535)
-            {
-                Write-Message $null "Binding Port must be in the range 1-65535." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
-                return $FALSE
-            }
-        }
-        catch [Exception]
-        {
-            Write-Message $null ($_.Exception.Message) "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
-            return $FALSE   
-        }
-
-        try
-        {
-            [bool]$test = [System.Convert]::ToBoolean($binding.AddToHostsFile)
-        }
-        catch [Exception]
-        {
-            Write-Message $null ($_.Exception.Message) "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
-            return $FALSE   
-        }
-    }
-
-    return $TRUE
-}
-
-function Test-PublishingServerRole([xml]$config)
-{
-    if (Get-ConfigOption $config "WebServer/CMServerSettings/enabled" $TRUE)
-    {    
-        return (Get-ConfigOption $config "WebServer/CMServerSettings/Publishing/enabled" $TRUE)            
-    }
-    return $FALSE
+    return $script:configSettings.Database.DatabaseInstallPath.Unc
 }
 
 function Find-FolderInZipFile($items, [string]$folderName)
@@ -425,10 +179,10 @@ function Find-FolderInZipFile($items, [string]$folderName)
     } 
 }
 
-function Get-SitecoreVersion([xml]$config, [bool]$getFromZip=$FALSE, [bool]$getFullVersion=$FALSE)
+function Get-SitecoreVersion([bool]$getFromZip=$FALSE, [bool]$getFullVersion=$FALSE)
 {
     # Returns the version of the Sitecore.Kernel.dll
-    $installPath = Join-path $config.InstallSettings.WebServer.SitecoreInstallRoot -ChildPath $config.InstallSettings.WebServer.SitecoreInstallFolder
+    $installPath = Join-Path $script:configSettings.WebServer.SitecoreInstallRoot -ChildPath $script:configSettings.WebServer.SitecoreInstallFolder
     $webrootPath = Join-Path $installPath -ChildPath "Website"
     $kernelPath = Join-Path $webrootPath -ChildPath "bin\Sitecore.Kernel.dll"
 
@@ -439,7 +193,7 @@ function Get-SitecoreVersion([xml]$config, [bool]$getFromZip=$FALSE, [bool]$getF
             New-Item $installPath -type directory -force | Out-Null
         }
 
-        $zipPath = $config.InstallSettings.SitecoreZipPath
+        $zipPath = $script:configSettings.SitecoreZipPath
         $shell = New-Object -com shell.application
         $item = Find-FolderInZipFile $shell.NameSpace($zipPath).Items() "bin"
         $kernelItem = $shell.NameSpace($item.Path).Items() | Where {$_.Name -match "Sitecore.Kernel.dll"}
@@ -463,9 +217,653 @@ function Get-SitecoreVersion([xml]$config, [bool]$getFromZip=$FALSE, [bool]$getF
     return $versionInfo
 }
 
-function Test-SupportedSitecoreVersion([xml]$config)
+function Get-BaseConnectionString
 {
-    $versionToInstall = Get-SitecoreVersion $config $true
+    $sqlServerName = $script:configSettings.Database.SqlServerName
+    
+    if ($script:configSettings.Database.UseWindowsAuthenticationForSqlDataAccess)
+    {
+        $baseConnectionString = "Server=$sqlServerName;Trusted_Connection=Yes;Database="
+    }
+    else
+    {
+        if ([string]::IsNullOrEmpty($script:configSettings.Database.SqlLoginForDataAccess))
+        {
+            $loginName = $script:configSettings.Database.SqlLoginForInstall
+            $loginPassword = $script:configSettings.Database.SqlLoginForInstallPassword
+        }
+        else
+        {
+            $loginName = $script:configSettings.Database.SqlLoginForDataAccess
+            $loginPassword = $script:configSettings.Database.SqlLoginForDataAccessPassword
+        }
+
+        $baseConnectionString = "user id=$loginName;password=$loginPassword;Data Source=$sqlServerName;Database="
+    }
+
+    return $baseConnectionString
+}
+
+function Get-SubstituteDatabaseFileName($currentFileName, $dbName)
+{
+    # Function assumes name format will be Sitecore.{$dbname}.{ldf|mdf}
+    $prefix = $currentFileName.Substring(0,8)
+    $suffix = $currentFileName.Substring($currentFileName.Length-3)
+    return ("{0}.{1}.{2}" -f $prefix,$dbName,$suffix)
+}
+
+function Set-AclForFolder([string]$userName, [string]$permission, [string]$folderPath)
+{
+    $acl = Get-Acl $folderPath
+    $rule = New-Object System.Security.AccessControl.FileSystemAccessRule($userName, $permission, "ContainerInherit,ObjectInherit", "None", "Allow")
+    $acl.SetAccessRule($rule)
+    Set-Acl $folderPath $acl
+    Write-Message "Added $userName to ACL ($permission) for $folderPath" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+}
+
+function Test-IsUserMemberOfLocalGroup([string]$groupName, [string]$userName)
+{
+    $group =[ADSI]"WinNT://$env:COMPUTERNAME/$groupName,group" 
+    $members = @($group.psbase.Invoke("Members")) 
+
+    foreach ($member in $members)
+    {
+        $memberName = $member.GetType().InvokeMember("Name", 'GetProperty', $null, $member, $null)
+        if ($memberName -eq $userName)
+        {
+            return $TRUE
+        }
+    }
+
+    return $FALSE
+}
+
+function Add-CalculatedPropertiesToConfigurationSettings
+{
+    # WebServer.SitecoreInstallPath
+    $sitecoreInstallPath = Join-Path $script:configSettings.WebServer.SitecoreInstallRoot -ChildPath $script:configSettings.WebServer.SitecoreInstallFolder
+    $script:configSettings.WebServer | Add-Member –MemberType NoteProperty –Name SitecoreInstallPath –Value $sitecoreInstallPath
+
+    # WebServer.SitecoreLogPath
+    $sitecoreLogPath = ""
+    if (!([string]::IsNullOrEmpty($script:configSettings.LogFileName)))
+    {
+        $sitecoreLogPath = Join-path $script:configSettings.WebServer.SitecoreInstallPath -ChildPath $script:configSettings.LogFileName
+    }
+    $script:configSettings.WebServer | Add-Member –MemberType NoteProperty –Name SitecoreLogPath –Value $sitecoreLogPath
+
+    # Database.BaseConnectionString
+    $script:configSettings.Database | Add-Member –MemberType NoteProperty –Name BaseConnectionString –Value (Get-BaseConnectionString)
+}
+
+function New-ConfigSettings([xml]$config)
+{
+    #region WebServer
+
+    #region IISBindings
+    $iisbindings = New-Object 'System.Collections.Generic.List[PSObject]'
+    foreach ($binding in ($config.InstallSettings.WebServer.IISBindings.Binding))
+    {
+        $b = New-Object -TypeName PSObject
+
+        $ip = $binding.IP
+        if (!([string]::IsNullOrEmpty($ip)))
+        {
+            $ip = $ip.Trim()
+        }
+        [int]$port = $binding.Port
+        $hostheader = $binding.HostHeader
+        if (!([string]::IsNullOrEmpty($hostheader)))
+        {
+            $hostheader = $hostheader.Trim()
+        }
+        [bool]$addToHostsFile = [System.Convert]::ToBoolean($binding.AddToHostsFile)
+
+        $b | Add-Member –MemberType NoteProperty –Name IP –Value $ip
+        $b | Add-Member –MemberType NoteProperty –Name Port –Value $port
+        $b | Add-Member –MemberType NoteProperty –Name HostHeader –Value $hostheader        
+        $b | Add-Member –MemberType NoteProperty –Name AddToHostsFile –Value $addToHostsFile
+
+        $iisBindings.Add($b)
+    }
+    #endregion
+
+    #region CMServerSettings
+    $parallel = New-Object -TypeName PSObject
+    [int]$growthsize = $config.InstallSettings.WebServer.CMServerSettings.Publishing.Parallel.WebDatabaseAutoGrowthInMB
+    [int]$degrees = $config.InstallSettings.WebServer.CMServerSettings.Publishing.Parallel.MaxDegreesOfParallelism
+    $parallel | Add-Member –MemberType NoteProperty –Name Enabled –Value (Get-ConfigOption $config "WebServer/CMServerSettings/Publishing/Parallel/enabled" $TRUE)
+    $parallel | Add-Member –MemberType NoteProperty –Name WebDatabaseAutoGrowthInMB –Value $growthsize
+    $parallel | Add-Member –MemberType NoteProperty –Name MaxDegreesOfParallelism –Value $degrees
+
+    $publishing = New-Object -TypeName PSObject
+    $publishingInstance = $config.InstallSettings.WebServer.CMServerSettings.Publishing.PublishingInstance
+    if (!([string]::IsNullOrEmpty($publishingInstance)))
+    {
+        $publishingInstance = $publishingInstance.Trim()
+    }
+    $appPoolIdleTimeout = $config.InstallSettings.WebServer.CMServerSettings.Publishing.AppPoolIdleTimeout
+    if (!([string]::IsNullOrEmpty($appPoolIdleTimeout)))
+    {
+        $appPoolIdleTimeout = $appPoolIdleTimeout.Trim()
+    }
+    $publishing | Add-Member –MemberType NoteProperty –Name Enabled –Value (Get-ConfigOption $config "WebServer/CMServerSettings/Publishing/enabled" $TRUE)
+    $publishing | Add-Member –MemberType NoteProperty –Name PublishingInstance –Value $publishingInstance
+    $publishing | Add-Member –MemberType NoteProperty –Name AppPoolIdleTimeout –Value $appPoolIdleTimeout
+    $publishing | Add-Member –MemberType NoteProperty –Name Parallel –Value $parallel
+
+    $cmServerSettings = New-Object -TypeName PSObject
+    $instanceName = $config.InstallSettings.WebServer.CMServerSettings.InstanceName
+    if (!([string]::IsNullOrEmpty($instanceName)))
+    {
+        $instanceName = $instanceName.Trim()
+    }
+    $cmServerSettings | Add-Member –MemberType NoteProperty –Name Enabled –Value (Get-ConfigOption $config "WebServer/CMServerSettings/enabled" $TRUE)
+    $cmServerSettings | Add-Member –MemberType NoteProperty –Name InstanceName –Value $instanceName
+    $cmServerSettings | Add-Member –MemberType NoteProperty –Name Publishing –Value $publishing
+    #endregion
+
+    #region CDServerSettings
+    $cdServerSettings = New-Object -TypeName PSObject
+    $cdServerSettings | Add-Member –MemberType NoteProperty –Name Enabled –Value (Get-ConfigOption $config "WebServer/CDServerSettings/enabled" $TRUE)
+    $cdServerSettings | Add-Member –MemberType NoteProperty –Name ApplyIPWhitelist –Value (Get-ConfigOption $config "WebServer/CDServerSettings/ApplyIPWhitelist")
+    $cdServerSettings | Add-Member –MemberType NoteProperty –Name DeactivateConnectionStrings –Value (Get-ConfigOption $config "WebServer/CDServerSettings/DeactivateConnectionStrings")
+    $cdServerSettings | Add-Member –MemberType NoteProperty –Name ConfigureFilesForCD –Value (Get-ConfigOption $config "WebServer/CDServerSettings/ConfigureFilesForCD")
+    $cdServerSettings | Add-Member –MemberType NoteProperty –Name PreventAnonymousAccess –Value (Get-ConfigOption $config "WebServer/CDServerSettings/PreventAnonymousAccess")
+    $cdServerSettings | Add-Member –MemberType NoteProperty –Name DenyExecutePermission –Value (Get-ConfigOption $config "WebServer/CDServerSettings/DenyExecutePermission")
+    $cdServerSettings | Add-Member –MemberType NoteProperty –Name DisableUploadWatcher –Value (Get-ConfigOption $config "WebServer/CDServerSettings/DisableUploadWatcher")
+    #endregion
+
+    #region IPWhiteList
+    $ipWhiteList = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($ip in ($config.InstallSettings.WebServer.IPWhiteList.IP))
+    {
+        $ipValue = $ip
+        if (!([string]::IsNullOrEmpty($ipValue)))
+        {
+            $ipValue = $ipValue.Trim()
+        }
+
+        $ipWhiteList.Add($ipValue)
+    }
+
+    #endregion
+
+    #region SessionStateProvider
+    $sessionStateProvider = New-Object -TypeName PSObject
+
+    $private = $config.InstallSettings.WebServer.SessionStateProvider.Private
+    if (!([string]::IsNullOrEmpty($private)))
+    {
+        $private = $private.Trim()
+    }
+    $shared = $config.InstallSettings.WebServer.SessionStateProvider.Shared
+    if (!([string]::IsNullOrEmpty($shared)))
+    {
+        $shared = $shared.Trim()
+    }
+
+    $sessionStateProvider | Add-Member –MemberType NoteProperty –Name Private –Value $private
+    $sessionStateProvider | Add-Member –MemberType NoteProperty –Name Shared –Value $shared
+    #endregion
+
+    #region Solr
+    $solr = New-Object -TypeName PSObject
+
+    $serviceBaseAddress = $config.InstallSettings.WebServer.Solr.ServiceBaseAddress
+    if (!([string]::IsNullOrEmpty($serviceBaseAddress)))
+    {
+        $serviceBaseAddress = $serviceBaseAddress.Trim()
+    }
+
+    $solr | Add-Member –MemberType NoteProperty –Name ServiceBaseAddress –Value $serviceBaseAddress
+    #endregion
+
+    #region MongoDb
+    $credentials = New-Object -TypeName PSObject
+    $username = $config.InstallSettings.WebServer.MongoDb.Credentials.Username
+    if (!([string]::IsNullOrEmpty($username)))
+    {
+        $username = $username.Trim()
+    }
+    $password = $config.InstallSettings.WebServer.MongoDb.Credentials.Password
+    if (!([string]::IsNullOrEmpty($password)))
+    {
+        $password = $password.Trim()
+    }
+    $credentials | Add-Member –MemberType NoteProperty –Name Username –Value $username
+    $credentials | Add-Member –MemberType NoteProperty –Name Password –Value $password
+
+    $hosts = New-Object 'System.Collections.Generic.List[PSObject]'
+    foreach ($mongohost in ($config.InstallSettings.WebServer.MongoDb.Hosts.Host))
+    {
+        $h = New-Object -TypeName PSObject
+
+        $hostname = $mongohost.HostName
+        if (!([string]::IsNullOrEmpty($hostname)))
+        {
+            $hostname = $hostname.Trim()
+        }
+        [int]$port = $mongohost.Port
+
+        $h | Add-Member –MemberType NoteProperty –Name HostName –Value $hostname
+        $h | Add-Member –MemberType NoteProperty –Name Port –Value $port
+
+        $hosts.Add($h)
+    }
+
+    $mongodb = New-Object -TypeName PSObject
+    $options = $config.InstallSettings.WebServer.MongoDb.Options
+    if (!([string]::IsNullOrEmpty($options)))
+    {
+        $options = $options.Trim()
+    }
+    $mongodb | Add-Member –MemberType NoteProperty –Name Enabled –Value (Get-ConfigOption $config "WebServer/MongoDb/enabled" $TRUE)
+    $mongodb | Add-Member –MemberType NoteProperty –Name Credentials –Value $credentials
+    $mongodb | Add-Member -MemberType NoteProperty -Name Hosts -Value $hosts
+    $mongodb | Add-Member -MemberType NoteProperty -Name Options -Value $options
+    #endregion
+
+    $webserver = New-Object -TypeName PSObject
+
+    $licenseFilePath = $config.InstallSettings.WebServer.LicenseFilePath
+    if (!([string]::IsNullOrEmpty($licenseFilePath)))
+    {
+        $licenseFilePath = $licenseFilePath.Trim()
+    }
+    $sitecoreInstallRoot = $config.InstallSettings.WebServer.SitecoreInstallRoot
+    if (!([string]::IsNullOrEmpty($sitecoreInstallRoot)))
+    {
+        $sitecoreInstallRoot = $sitecoreInstallRoot.Trim()
+    }
+    $sitecoreInstallFolder = $config.InstallSettings.WebServer.SitecoreInstallFolder
+    if (!([string]::IsNullOrEmpty($sitecoreInstallFolder)))
+    {
+        $sitecoreInstallFolder = $sitecoreInstallFolder.Trim()
+    }
+    $lastChildFolderOfIncludeDirectory = $config.InstallSettings.WebServer.LastChildFolderOfIncludeDirectory
+    if (!([string]::IsNullOrEmpty($lastChildFolderOfIncludeDirectory)))
+    {
+        $lastChildFolderOfIncludeDirectory = $lastChildFolderOfIncludeDirectory.Trim()
+    }
+    $iisWebSiteName = $config.InstallSettings.WebServer.IISWebSiteName
+    if (!([string]::IsNullOrEmpty($iisWebSiteName)))
+    {
+        $iisWebSiteName = $iisWebSiteName.Trim()
+    }
+    $defaultRuntimeVersion = $config.InstallSettings.WebServer.DefaultRuntimeVersion
+    if (!([string]::IsNullOrEmpty($defaultRuntimeVersion)))
+    {
+        $defaultRuntimeVersion = $defaultRuntimeVersion.Trim()
+    }
+    $appPoolIdentity = $config.InstallSettings.WebServer.AppPoolIdentity
+    if (!([string]::IsNullOrEmpty($appPoolIdentity)))
+    {
+        $appPoolIdentity = $appPoolIdentity.Trim()
+    }
+    $appPoolIdentityPassword = $config.InstallSettings.WebServer.AppPoolIdentityPassword
+    if (!([string]::IsNullOrEmpty($appPoolIdentityPassword)))
+    {
+        $appPoolIdentityPassword = $appPoolIdentityPassword.Trim()
+    }
+
+    $webserver | Add-Member –MemberType NoteProperty –Name LicenseFilePath –Value $licenseFilePath
+    $webserver | Add-Member –MemberType NoteProperty –Name SitecoreInstallRoot –Value $sitecoreInstallRoot
+    $webserver | Add-Member –MemberType NoteProperty –Name SitecoreInstallFolder –Value $sitecoreInstallFolder
+    $webserver | Add-Member –MemberType NoteProperty –Name LastChildFolderOfIncludeDirectory –Value $lastChildFolderOfIncludeDirectory
+    $webserver | Add-Member –MemberType NoteProperty –Name IISWebSiteName –Value $iisWebSiteName
+    $webserver | Add-Member –MemberType NoteProperty –Name DefaultRuntimeVersion –Value $defaultRuntimeVersion
+    $webserver | Add-Member –MemberType NoteProperty –Name AppPoolIdentity –Value $appPoolIdentity
+    $webserver | Add-Member –MemberType NoteProperty –Name AppPoolIdentityPassword –Value $appPoolIdentityPassword
+    $webserver | Add-Member –MemberType NoteProperty –Name IISBindings –Value $iisbindings
+    $webserver | Add-Member –MemberType NoteProperty –Name CMServerSettings –Value $cmServerSettings
+    $webserver | Add-Member –MemberType NoteProperty –Name CDServerSettings –Value $cdServerSettings
+    $webserver | Add-Member –MemberType NoteProperty –Name IPWhiteList –Value $ipWhiteList
+    $webserver | Add-Member –MemberType NoteProperty –Name SessionStateProvider –Value $sessionStateProvider
+    $webserver | Add-Member –MemberType NoteProperty –Name Solr –Value $solr
+    $webserver | Add-Member –MemberType NoteProperty –Name MongoDb –Value $mongodb
+    #endregion
+
+    #region Database
+
+    #region DatabaseNames
+    $databaseNames = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($dbname in ($config.InstallSettings.Database.DatabaseNames.name))
+    {
+        $name = $dbname
+        if (!([string]::IsNullOrEmpty($name)))
+        {
+            $name = $name.Trim()
+        }
+
+        $databaseNames.Add($name)
+    }
+    #endregion
+
+    #region WebDatabaseCopies
+    $webDatabaseCopies = New-Object 'System.Collections.Generic.List[string]'
+    foreach ($copy in ($config.InstallSettings.Database.WebDatabaseCopies.copy))
+    {
+        $copyname = $copy
+        if (!([string]::IsNullOrEmpty($copyname)))
+        {
+            $copyname = $copyname.Trim()
+        }
+
+        $webDatabaseCopies.Add($copyname)
+    }
+    #endregion
+
+    #region DatabaseInstallPath
+    $databaseInstallPath = New-Object -TypeName PSObject
+
+    $local = $config.InstallSettings.Database.DatabaseInstallPath.Local
+    if (!([string]::IsNullOrEmpty($local)))
+    {
+        $local = $local.Trim()
+    }
+    $unc = $config.InstallSettings.Database.DatabaseInstallPath.Unc
+    if (!([string]::IsNullOrEmpty($unc)))
+    {
+        $unc = $unc.Trim()
+    }
+
+    $databaseInstallPath | Add-Member -MemberType NoteProperty -Name Local -Value $local
+    $databaseInstallPath | Add-Member -MemberType NoteProperty -Name Unc -Value $unc
+    #endregion
+
+    $database = New-Object -TypeName PSObject
+
+    $sqlServerName = $config.InstallSettings.Database.SqlServerName
+    if (!([string]::IsNullOrEmpty($sqlServerName)))
+    {
+        $sqlServerName = $sqlServerName.Trim()
+    }
+    $sqlLoginForInstall = $config.InstallSettings.Database.SqlLoginForInstall
+    if (!([string]::IsNullOrEmpty($sqlLoginForInstall)))
+    {
+        $sqlLoginForInstall = $sqlLoginForInstall.Trim()
+    }
+    $sqlLoginForInstallPassword = $config.InstallSettings.Database.SqlLoginForInstallPassword
+    if (!([string]::IsNullOrEmpty($sqlLoginForInstallPassword)))
+    {
+        $sqlLoginForInstallPassword = $sqlLoginForInstallPassword.Trim()
+    }
+    $sqlLoginForDataAccess = $config.InstallSettings.Database.SqlLoginForDataAccess
+    if (!([string]::IsNullOrEmpty($sqlLoginForDataAccess)))
+    {
+        $sqlLoginForDataAccess = $sqlLoginForDataAccess.Trim()
+    }
+    $sqlLoginForDataAccessPassword = $config.InstallSettings.Database.SqlLoginForDataAccessPassword
+    if (!([string]::IsNullOrEmpty($sqlLoginForDataAccessPassword)))
+    {
+        $sqlLoginForDataAccessPassword = $sqlLoginForDataAccessPassword.Trim()
+    }
+    $databaseNamePrefix = $config.InstallSettings.Database.DatabaseNamePrefix
+    if (!([string]::IsNullOrEmpty($databaseNamePrefix)))
+    {
+        $databaseNamePrefix = $databaseNamePrefix.Trim()
+    }
+
+    $database | Add-Member –MemberType NoteProperty –Name InstallDatabase –Value (Get-ConfigOption $config "Database/InstallDatabase")
+    $database | Add-Member -MemberType NoteProperty -Name DatabaseNames -Value $databaseNames
+    $database | Add-Member -MemberType NoteProperty -Name WebDatabaseCopies -Value $webDatabaseCopies
+    $database | Add-Member -MemberType NoteProperty -Name SqlServerName -Value $sqlServerName
+    $database | Add-Member -MemberType NoteProperty -Name SqlLoginForInstall -Value $sqlLoginForInstall
+    $database | Add-Member -MemberType NoteProperty -Name SqlLoginForInstallPassword -Value $sqlLoginForInstallPassword
+    $database | Add-Member -MemberType NoteProperty -Name SqlLoginForDataAccess -Value $sqlLoginForDataAccess
+    $database | Add-Member -MemberType NoteProperty -Name SqlLoginForDataAccessPassword -Value $sqlLoginForDataAccessPassword
+    $database | Add-Member –MemberType NoteProperty –Name UseWindowsAuthenticationForSqlDataAccess –Value (Get-ConfigOption $config "Database/UseWindowsAuthenticationForSqlDataAccess")
+    $database | Add-Member -MemberType NoteProperty -Name DatabaseInstallPath -Value $databaseInstallPath
+    $database | Add-Member -MemberType NoteProperty -Name DatabaseNamePrefix -Value $databaseNamePrefix
+    #endregion
+
+    $script:configSettings = New-Object -TypeName PSObject
+
+    $logFileName = $config.InstallSettings.LogFileName
+    if (!([string]::IsNullOrEmpty($logFileName)))
+    {
+        $logFileName = $logFileName.Trim()
+    }
+    $sitecoreZipPath = $config.InstallSettings.SitecoreZipPath
+    if (!([string]::IsNullOrEmpty($sitecoreZipPath)))
+    {
+        $sitecoreZipPath = $sitecoreZipPath.Trim()
+    }
+
+    $script:configSettings | Add-Member –MemberType NoteProperty –Name LogFileName –Value $logFileName            
+    $script:configSettings | Add-Member –MemberType NoteProperty –Name SitecoreZipPath –Value $sitecoreZipPath
+    $script:configSettings | Add-Member –MemberType NoteProperty –Name SuppressPrompts –Value (Get-ConfigOption $config "SuppressPrompts")
+    $script:configSettings | Add-Member –MemberType NoteProperty –Name WebServer –Value $webserver
+    $script:configSettings | Add-Member –MemberType NoteProperty –Name Database –Value $database
+}
+#endregion
+
+#region Sanity Checks
+function Test-Module([string]$name)
+{
+    if(-not(Get-Module -name $name))
+    {
+        if(Get-Module -ListAvailable | Where-Object { $_.name -eq $name })
+        {
+            Write-Message "Importing $name module." "Gray" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+            Import-Module -Name $name -DisableNameChecking
+            Write-Message "`n" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+            $TRUE
+        }
+        else
+        {
+            $FALSE
+        } 
+    }
+    else
+    {
+        Write-Message "$name module is already imported.`n" "Gray" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+        $TRUE
+    }
+}
+
+function Test-PreRequisites
+{
+    Write-Message "Testing script pre-requisites." "Gray" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+
+    $currentPrincipal = New-Object Security.Principal.WindowsPrincipal([Security.Principal.WindowsIdentity]::GetCurrent())
+    if (!($currentPrincipal.IsInRole( [Security.Principal.WindowsBuiltInRole]::Administrator )))
+    {
+        Write-Message "Warning: PowerShell must run as an Administrator." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+        return $FALSE
+    }
+
+    $moduleName = "SQLPS"
+    if (!(Test-Module $moduleName))
+    {
+        Write-Message "Warning: SQL PowerShell Module ($moduleName) is not installed." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+        return $FALSE
+    }
+    else
+    {
+        Set-Location -Path $scriptDir
+    }
+
+    $moduleName = "WebAdministration"
+    if (!(Test-Module $moduleName))
+    {
+        Write-Message "Warning: IIS PowerShell Module ($moduleName) is not installed." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+        return $FALSE
+    }
+
+    return $TRUE
+}
+
+function Test-SqlLoginConfiguration
+{
+    $login = Get-SqlLoginAccountForDataAccess
+    if ($login -eq $null)
+    {
+        return $FALSE
+    }
+
+    return $TRUE
+}
+
+function Test-MemberOfRole([string]$memberName, [string]$roleName, [Microsoft.SqlServer.Management.Smo.Server]$sqlServerSmo)
+{
+    $roleMembers = $sqlServerSmo.Roles[$roleName].EnumServerRoleMembers()
+    if ($roleMembers |  Where-Object { $memberName -contains $_ })
+    {
+        return $TRUE
+    }
+    else
+    {
+        $FALSE
+    }
+}
+
+function Test-SqlConnectionAndRoles
+{
+    [Microsoft.SqlServer.Management.Smo.Server]$sqlServerSmo = Get-SqlServerSmo
+
+    try
+    {
+        # Validate SQL connection can be established
+        $sqlServerSmo.ConnectionContext.Connect()
+
+        # Validate server roles for install login: must be sysadmin
+        $memberName = $script:configSettings.Database.SqlLoginForInstall
+        $isSysAdmin = Test-MemberOfRole $memberName "sysadmin" $sqlServerSmo
+        if (!$isSysAdmin)
+        {
+            Write-Message "$memberName doesn't have required server roles in SQL" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+            Write-Message "Grant the sysadmin role to $memberName" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+            return $FALSE
+        }
+
+        # Validate data access login exists
+        $loginName = Get-SqlLoginAccountForDataAccess
+        if ($sqlServerSmo.Logins[$loginName] -eq $null)
+        {
+            Write-Message "Could not find a login called $loginName on SQL server" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+            return $FALSE
+        }
+
+        return $TRUE
+    }
+    catch [Exception]
+    {
+        Write-Message ($_.Exception) "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+        return $FALSE
+    }
+}
+
+function Test-SqlInstallPath
+{
+    # Check that path exists
+    $dbInstallPath = Get-DatabaseInstallFolderPath $FALSE
+    if (Test-Path $dbInstallPath)
+    {
+        # Check that SQL has correct rights over install path, else Database Attach will fail
+        [Microsoft.SqlServer.Management.Smo.Server]$sqlServerSmo = Get-SqlServerSmo        
+        $user = $sqlServerSmo.SqlDomainGroup
+        $acl = Get-Acl $dbInstallPath
+        $isCorrectRights = $acl.Access | Where {($_.IdentityReference -eq $user) -and ($_.FileSystemRights -eq "FullControl")}
+        if($isCorrectRights)
+        {
+            return $TRUE
+        }  
+        else
+        {
+            Write-Message "SQL doesn't appear to have enough rights for the install path." "Yellow" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+            Write-Message "This might be because SQL is using builtin virtual service accounts, which are local accounts that exist on a different server than the Sitecore server. If this is true, you may IGNORE this message." "Yellow" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+            Write-Message "Ensure that the SQL service for your SQL instance has FullControl of $dbInstallPath" "Yellow" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+            Write-Message "Failure to do so will PREVENT the databases from attaching.`n" "Yellow" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+
+            if ($script:configSettings.SuppressPrompts)
+            {
+                return $TRUE
+            }
+            else
+            {
+                $shell = new-object -comobject "WScript.Shell"
+                $result = $shell.popup("Do you wish to proceed?",0,"Question",4+32)
+                # $result will be 6 for yes, 7 for no.
+                if ($result -eq 6)
+                {
+                    return $TRUE
+                }
+            }
+        }
+    }
+    else
+    {
+        Write-Message "Path does not exist: $dbInstallPath" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+    }
+
+    return $FALSE
+}
+
+function Test-WebDatabseCopyNames
+{
+    $dbCopies = $script:configSettings.Database.WebDatabaseCopies
+
+    if ($dbCopies.copy.Count -ne ($dbCopies.copy | select -Unique).Count)
+    {
+        Write-Message "The name of a web database copy was used more than once in the config file." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+        return $FALSE
+    }
+
+    if ($dbCopies.copy -contains "web")
+    {
+        Write-Message "Cannot use 'web' (name is case-insensitive) as the name of a web database copy." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+        return $FALSE
+    }
+
+    return $TRUE
+}
+
+function Test-IISBindings
+{
+    foreach ($binding in $script:configSettings.WebServer.IISBindings)
+    {
+        if ($binding.IP.Length -eq 0)
+        {
+            Write-Message "Binding must contain a non-empty IP attribute." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+            return $FALSE
+        }
+
+        if ($binding.IP -ne "*" -and !([bool]($binding.IP -as [ipaddress])))
+        {
+            Write-Message "Binding's IP attribute must either be a valid IP or the '*' character." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+            return $FALSE
+        }
+
+        if ($binding.Port.Length -eq 0)
+        {
+            Write-Message "Binding must contain a non-empty Port attribute." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+            return $FALSE
+        }
+
+        if ($binding.Port -lt 1 -or $binding.Port -gt 65535)
+        {
+            Write-Message "Binding Port must be in the range 1-65535." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+            return $FALSE
+        }
+    }
+
+    return $TRUE
+}
+
+function Test-PublishingServerRole
+{
+    if ($script:configSettings.WebServer.CMServerSettings.Enabled)
+    {    
+        return ($script:configSettings.WebServer.CMServerSettings.Publishing.Enabled)            
+    }
+    return $FALSE
+}
+
+function Test-SupportedSitecoreVersion
+{
+    $versionToInstall = Get-SitecoreVersion $TRUE
 
     if ($versionToInstall -eq "8.0")
     {
@@ -479,17 +877,17 @@ function Test-SupportedSitecoreVersion([xml]$config)
     return $FALSE
 }
 
-function Test-MongoDbConfiguration([xml]$config)
+function Test-MongoDbConfiguration
 {
-    if (Get-ConfigOption $config "WebServer/MongoDb/enabled" $TRUE)
+    if ($script:configSettings.WebServer.MongoDb.Enabled)
     {
-        $username = $config.InstallSettings.WebServer.MongoDb.Credentials.Username
-        $password = $config.InstallSettings.WebServer.MongoDb.Credentials.Password        
+        $username = $script:configSettings.WebServer.MongoDb.Credentials.Username
+        $password = $script:configSettings.WebServer.MongoDb.Credentials.Password        
         if (!([string]::IsNullOrEmpty($username)))
         {
             if ([string]::IsNullOrEmpty($password))
             {
-                Write-Message $null "A username was given without a password for MongoDB. The password cannot be blank." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+                Write-Message "A username was given without a password for MongoDB. The password cannot be blank." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
                 return $FALSE
             }
         }
@@ -498,18 +896,17 @@ function Test-MongoDbConfiguration([xml]$config)
         {
             if ([string]::IsNullOrEmpty($username))
             {
-                Write-Message $null "A password was given without a username for MongoDB. The username cannot be blank." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+                Write-Message "A password was given without a username for MongoDB. The username cannot be blank." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
                 return $FALSE
             }
         }
         
         $numhosts = 0
-        $hosts = $config.InstallSettings.WebServer.MongoDb.Hosts.Host
-        foreach ($mongohost in $hosts)
+        foreach ($mongohost in $script:configSettings.WebServer.MongoDb.Hosts)
         {
             if ($mongohost.HostName.Length -eq 0)
             {
-                Write-Message $null "MongoDB HostName must cannot be empty." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+                Write-Message "MongoDB HostName must cannot be empty." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
                 return $FALSE
             }
             else
@@ -517,28 +914,16 @@ function Test-MongoDbConfiguration([xml]$config)
                 $numhosts++
             }
 
-            if ($mongohost.Port.Length -gt 0)
+            if ($mongohost.Port -lt 1 -or $mongohost.Port -gt 65535)
             {
-                try
-                {
-                    [int]$port = $mongohost.Port
-                    if ($port -lt 1 -or $port -gt 65535)
-                    {
-                        Write-Message $null "MongoDB host Port must be in the range 1-65535." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
-                        return $FALSE
-                    }
-                }
-                catch [Exception]
-                {
-                    Write-Message $null ($_.Exception.Message) "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
-                    return $FALSE
-                }
+                Write-Message "MongoDB host Port must be in the range 1-65535." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+                return $FALSE
             }
         }
 
         if ($numhosts -lt 1)
         {
-            Write-Message $null "MongoDB requies at least one Host to be specified." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+            Write-Message "MongoDB requies at least one Host to be specified." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
             return $FALSE
         }
     }
@@ -546,355 +931,349 @@ function Test-MongoDbConfiguration([xml]$config)
     return $TRUE
 }
 
-function Test-SessionStateConfiguration([xml]$config)
+function Test-SessionStateConfiguration
 {
-    if (Get-ConfigOption $config "WebServer/CMServerSettings/enabled" $TRUE)
+    if ($script:configSettings.WebServer.CMServerSettings.Enabled)
     {
-        if ($config.InstallSettings.WebServer.SessionStateProvider.Shared.ToLower() -ne "inproc")
+        if ($script:configSettings.WebServer.SessionStateProvider.Shared.ToLower() -ne "inproc")
         {
-            Write-Message $null "Out of proc shared session state providers are not supported on CMs. You must use the inproc provider." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+            Write-Message "Out of proc shared session state providers are not supported on CMs. You must use the inproc provider." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
             return $FALSE
         }
     }
 
-    $sessionStateProvider = $config.InstallSettings.WebServer.SessionStateProvider.Private.ToLower()
+    $sessionStateProvider = $script:configSettings.WebServer.SessionStateProvider.Private.ToLower()
     if ($sessionStateProvider -eq "mongo")
     {
-        Write-Message $null "Mongo is not currently supported by installer for a private SessionStateProvider" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+        Write-Message "Mongo is not currently supported by installer for a private SessionStateProvider" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
         return $FALSE
     }
     elseif ($sessionStateProvider -ne "inproc" -and $sessionStateProvider -ne "mssql")
     {
-        Write-Message $null "Private SessionStateProvider selection is not recognized" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+        Write-Message "Private SessionStateProvider selection is not recognized" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
         return $FALSE
     }
 
-    $sessionStateProvider = $config.InstallSettings.WebServer.SessionStateProvider.Shared.ToLower()
+    $sessionStateProvider = $script:configSettings.WebServer.SessionStateProvider.Shared.ToLower()
     if ($sessionStateProvider -eq "mongo")
     {
-        Write-Message $null "Mongo is not currently supported by installer for a shared SessionStateProvider" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+        Write-Message "Mongo is not currently supported by installer for a shared SessionStateProvider" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
         return $FALSE
     }
     elseif ($sessionStateProvider -ne "inproc" -and $sessionStateProvider -ne "mssql")
     {
-        Write-Message $null "Shared SessionStateProvider selection is not recognized" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+        Write-Message "Shared SessionStateProvider selection is not recognized" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
         return $FALSE
     }
 
     return $TRUE
 }
 
-function Confirm-ConfigurationSettings([xml]$config)
+function Test-ConfigurationSettings
 {
-    if ([string]::IsNullOrEmpty($config.InstallSettings.SitecoreZipPath))
+    if ([string]::IsNullOrEmpty($script:configSettings.SitecoreZipPath))
     {
-        Write-Message $null "SitecoreZipPath cannot be null or empty" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+        Write-Message "SitecoreZipPath cannot be null or empty" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
         return $FALSE
     }
     else
     {
-        if (!(Test-Path $config.InstallSettings.SitecoreZipPath))
+        if (!(Test-Path $script:configSettings.SitecoreZipPath))
         {
-            Write-Message $null "Couldn't find a file specified by SitecoreZipPath" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+            Write-Message "Couldn't find a file specified by SitecoreZipPath" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
             return $FALSE
         }
 
-        if (!(Test-SupportedSitecoreVersion $config))
+        if (!(Test-SupportedSitecoreVersion))
         {
-            Write-Message $null "The version of Sitecore you are attempting to install is not supported." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+            Write-Message "The version of Sitecore you are attempting to install is not supported." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
             return $FALSE
         }
     }
 
-    if ([string]::IsNullOrEmpty($config.InstallSettings.WebServer.LicenseFilePath))
+    if ([string]::IsNullOrEmpty($script:configSettings.WebServer.LicenseFilePath))
     {
-        Write-Message $null "LicenseFilePath cannot be null or empty" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+        Write-Message "LicenseFilePath cannot be null or empty" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
         return $FALSE
     }
     else
     {
-        if (!(Test-Path $config.InstallSettings.WebServer.LicenseFilePath))
+        if (!(Test-Path $script:configSettings.WebServer.LicenseFilePath))
         {
-            Write-Message $null "Couldn't find a file specified by LicenseFilePath" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+            Write-Message "Couldn't find a file specified by LicenseFilePath" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
             return $FALSE
         }
     }
 
-    if ([string]::IsNullOrEmpty($config.InstallSettings.WebServer.SitecoreInstallRoot))
+    if ([string]::IsNullOrEmpty($script:configSettings.WebServer.SitecoreInstallRoot))
     {
-        Write-Message $null "SitecoreInstallRoot cannot be null or empty" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+        Write-Message "SitecoreInstallRoot cannot be null or empty" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
         return $FALSE
     }
 
-    if ([string]::IsNullOrEmpty($config.InstallSettings.WebServer.SitecoreInstallFolder))
+    if ([string]::IsNullOrEmpty($script:configSettings.WebServer.SitecoreInstallFolder))
     {
-        Write-Message $null "SitecoreInstallFolder cannot be null or empty" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+        Write-Message "SitecoreInstallFolder cannot be null or empty" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
         return $FALSE
     }
 
-    if ([string]::IsNullOrEmpty($config.InstallSettings.WebServer.IISWebSiteName))
+    if ([string]::IsNullOrEmpty($script:configSettings.WebServer.IISWebSiteName))
     {
-        Write-Message $null "IISWebSiteName cannot be null or empty" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+        Write-Message "IISWebSiteName cannot be null or empty" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
         return $FALSE
     }
 
-    if ([string]::IsNullOrEmpty($config.InstallSettings.WebServer.DefaultRuntimeVersion))
+    if ([string]::IsNullOrEmpty($script:configSettings.WebServer.DefaultRuntimeVersion))
     {
-        Write-Message $null "DefaultRuntimeVersion cannot be null or empty" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+        Write-Message "DefaultRuntimeVersion cannot be null or empty" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
         return $FALSE
     }
 
-    if ($config.InstallSettings.WebServer.IISBindings.ChildNodes.Count -lt 1)
+    if ($script:configSettings.WebServer.IISBindings.ChildNodes.Count -lt 1)
     {
-        Write-Message $null "IISBindings should provide at least one Binding." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+        Write-Message "IISBindings should provide at least one Binding." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
         return $FALSE
     }
     else
     {
-        if (!(Confirm-IISBindings $config))
+        if (!(Test-IISBindings))
         {
-            Write-Message $null "There was a problem with an IIS Binding." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+            Write-Message "There was a problem with an IIS Binding." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
             return $FALSE
         }
     }
 
-    if ([string]::IsNullOrEmpty($config.InstallSettings.WebServer.AppPoolIdentity))
+    if ([string]::IsNullOrEmpty($script:configSettings.WebServer.AppPoolIdentity))
     {
-        Write-Message $null "AppPoolIdentity cannot be null or empty" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+        Write-Message "AppPoolIdentity cannot be null or empty" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
         return $FALSE
     }
-    elseif ($config.InstallSettings.WebServer.AppPoolIdentity -ne "ApplicationPoolIdentity" -and $config.InstallSettings.WebServer.AppPoolIdentity -ne "NetworkService")
+    elseif ($script:configSettings.WebServer.AppPoolIdentity -ne "ApplicationPoolIdentity" -and $script:configSettings.WebServer.AppPoolIdentity -ne "NetworkService")
     {
         # Validate that input is in the form <domain>\<username>
-        $split = $config.InstallSettings.WebServer.AppPoolIdentity.Split("\")
+        $split = $script:configSettings.WebServer.AppPoolIdentity.Split("\")
         if ([string]::IsNullOrEmpty($split[0]) -or [string]::IsNullOrEmpty($split[1]))
         {
-            Write-Message $null "AppPoolIdentity must be of the form <domain>\<username>" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+            Write-Message "AppPoolIdentity must be of the form <domain>\<username>" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
             return $FALSE
         }
 
         # Validate that we have a password
-        if ([string]::IsNullOrEmpty($config.InstallSettings.WebServer.AppPoolIdentityPassword))
+        if ([string]::IsNullOrEmpty($script:configSettings.WebServer.AppPoolIdentityPassword))
         {
-            Write-Message $null "AppPoolIdentityPassword cannot be null or empty" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+            Write-Message "AppPoolIdentityPassword cannot be null or empty" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
             return $FALSE
         }
     }
     else
     {
         # Using a built-in account, ensure it will not be used for SQL login
-        if (Get-ConfigOption $config "Database/UseWindowsAuthenticationForSqlDataAccess")
+        if ($script:configSettings.Database.UseWindowsAuthenticationForSqlDataAccess)
         {
-            Write-Message $null "Must use a domain account for application pool identity when also using Windows authentication for SQL login" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+            Write-Message "Must use a domain account for application pool identity when also using Windows authentication for SQL login" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
             return $FALSE
         }
     }
 
-    if ((Get-ConfigOption $config "WebServer/CMServerSettings/enabled" $TRUE) -and (Get-ConfigOption $config "WebServer/CDServerSettings/enabled" $TRUE))
+    if ($script:configSettings.WebServer.CMServerSettings.Enabled -and $script:configSettings.WebServer.CDServerSettings.Enabled)
     {
-        Write-Message $null "CMServerSettings and CDServerSettings are both enabled. The Sitecore instance cannot be a CM and a CD server at the same time." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+        Write-Message "CMServerSettings and CDServerSettings are both enabled. The Sitecore instance cannot be a CM and a CD server at the same time." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
         return $FALSE
     }
 
-    if (!(Get-ConfigOption $config "WebServer/CMServerSettings/enabled" $TRUE) -and !(Get-ConfigOption $config "WebServer/CDServerSettings/enabled" $TRUE))
+    if (!$script:configSettings.WebServer.CMServerSettings.Enabled -and !$script:configSettings.WebServer.CDServerSettings.Enabled)
     {
-        Write-Message $null "Neither CMServerSettings nor CDServerSettings are enabled. You must choose a role for the Sitecore instance." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+        Write-Message "Neither CMServerSettings nor CDServerSettings are enabled. You must choose a role for the Sitecore instance." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
         return $FALSE
     }
 
-    if (Get-ConfigOption $config "WebServer/CMServerSettings/enabled" $TRUE)
+    if ($script:configSettings.WebServer.CMServerSettings.Enabled)
     {
-        if (!([string]::IsNullOrEmpty($config.InstallSettings.WebServer.CMServerSettings.Publishing.InstanceName)))
+        if (!([string]::IsNullOrEmpty($script:configSettings.WebServer.CMServerSettings.Publishing.InstanceName)))
         {
-            if ([string]::IsNullOrEmpty($config.InstallSettings.WebServer.CMServerSettings.InstanceName))
+            if ([string]::IsNullOrEmpty($script:configSettings.WebServer.CMServerSettings.InstanceName))
             {
-                Write-Message $null "You cannot use a Publishing.InstanceName without also specifying an InstanceName." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+                Write-Message "You cannot use a Publishing.InstanceName without also specifying an InstanceName." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
                 return $FALSE
             }
         }
     }
 
-    if (!(Test-SessionStateConfiguration $config))
+    if (!(Test-SessionStateConfiguration))
     {
-        Write-Message $null "There was a problem with the Session State configuration." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+        Write-Message "There was a problem with the Session State configuration." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
         return $FALSE
     }
 
-    if (!(Test-MongoDbConfiguration $config))
+    if (!(Test-MongoDbConfiguration))
     {
-        Write-Message $null "There was a problem with the MongoDB configuration." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+        Write-Message "There was a problem with the MongoDB configuration." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
         return $FALSE
     }
 
-    if ([string]::IsNullOrEmpty($config.InstallSettings.Database.SqlServerName))
+    if ([string]::IsNullOrEmpty($script:configSettings.Database.SqlServerName))
     {
-        Write-Message $null "SqlServerName cannot be null or empty" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+        Write-Message "SqlServerName cannot be null or empty" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
         return $FALSE
     }
 
-    if ([string]::IsNullOrEmpty($config.InstallSettings.Database.SqlLoginForInstall))
+    if ([string]::IsNullOrEmpty($script:configSettings.Database.SqlLoginForInstall))
     {
-        Write-Message $null "SqlLoginForInstall cannot be null or empty" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+        Write-Message "SqlLoginForInstall cannot be null or empty" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
         return $FALSE
     }
     else
     {
-        $split = $config.InstallSettings.Database.SqlLoginForInstall.Split("\")
+        $split = $script:configSettings.Database.SqlLoginForInstall.Split("\")
         if ($split.Count -eq 2)
         {
             # Validate that input is in the form <domain>\<username>
             if ([string]::IsNullOrEmpty($split[0]) -or [string]::IsNullOrEmpty($split[1]))
             {
-                Write-Message $null "SqlLoginForInstall must be of the form <domain>\<username>" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+                Write-Message "SqlLoginForInstall must be of the form <domain>\<username>" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
                 return $FALSE
             }
         }
     }
 
-    if ([string]::IsNullOrEmpty($config.InstallSettings.Database.SqlLoginForInstallPassword))
+    if ([string]::IsNullOrEmpty($script:configSettings.Database.SqlLoginForInstallPassword))
     {
-        Write-Message $null "SqlLoginForInstallPassword cannot be null or empty" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+        Write-Message "SqlLoginForInstallPassword cannot be null or empty" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
         return $FALSE
     }
 
-    if (!([string]::IsNullOrEmpty($config.InstallSettings.Database.SqlLoginForDataAccess)))
+    if (!([string]::IsNullOrEmpty($script:configSettings.Database.SqlLoginForDataAccess)))
     {
-        if ([string]::IsNullOrEmpty($config.InstallSettings.Database.SqlLoginForDataAccessPassword))
+        if ([string]::IsNullOrEmpty($script:configSettings.Database.SqlLoginForDataAccessPassword))
         {
-            Write-Message $null "SqlLoginForDataAccessPassword cannot be null or empty" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+            Write-Message "SqlLoginForDataAccessPassword cannot be null or empty" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
             return $FALSE
         }
 
         # Validate that login is not a domain account
-        $split = $config.InstallSettings.Database.SqlLoginForDataAccess.Split("\")
+        $split = $script:configSettings.Database.SqlLoginForDataAccess.Split("\")
         if ($split.Count -eq 2)
         {
-            Write-Message $null "SqlLoginForDataAccess cannot be a domain account" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+            Write-Message "SqlLoginForDataAccess cannot be a domain account" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
             return $FALSE
         }
     }
 
-    if (Get-ConfigOption $config "Database/InstallDatabase")
+    if ($script:configSettings.Database.InstallDatabase)
     {
-        if ([string]::IsNullOrEmpty($config.InstallSettings.Database.DatabaseInstallPath.Local))
+        if ([string]::IsNullOrEmpty($script:configSettings.Database.DatabaseInstallPath.Local))
         {
-            Write-Message $null "DatabaseInstallPath.Local cannot be null or empty" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+            Write-Message "DatabaseInstallPath.Local cannot be null or empty" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
             return $FALSE
         }
     
-        if (!(Confirm-SqlInstallPath $config))
+        if (!(Test-SqlInstallPath))
         {
-            Write-Message $null "DatabaseInstallPath is not valid." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+            Write-Message "DatabaseInstallPath is not valid." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
             return $FALSE
         }
     }
 
-    if (!(Confirm-SqlLoginConfiguration $config))
+    if (!(Test-SqlLoginConfiguration))
     {
-        Write-Message $null "The specified combination of accounts will not produce a valid SQL login for data access." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+        Write-Message "The specified combination of accounts will not produce a valid SQL login for data access." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
         return $FALSE
     }
 
-    if(!(Confirm-SqlConnectionAndRoles $config))
+    if(!(Test-SqlConnectionAndRoles))
     {
-        Write-Message $null "A problem has been detected with the SQL connection." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+        Write-Message "A problem has been detected with the SQL connection." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
         return $FALSE
     }
 
-    if (!(Confirm-WebDatabseCopyNames $config))
+    if (!(Test-WebDatabseCopyNames))
     {
-        Write-Message $null "There is a duplicate name in WebDatabaseCopies. Please remove the entry." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+        Write-Message "There is a duplicate name in WebDatabaseCopies. Please remove the entry." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
         return $FALSE
     }
     
-    $folderName = $config.InstallSettings.WebServer.LastChildFolderOfIncludeDirectory
+    $folderName = $script:configSettings.WebServer.LastChildFolderOfIncludeDirectory
     if (!([string]::IsNullOrEmpty($folderName)))
     {
         if (!($folderName.StartsWith("z")) -and !($folderName.StartsWith("Z")))
         {
-            Write-Message $null "LastChildFolderOfIncludeDirectory should have a name that guarantees it is the last folder (alphanumerically) in the /App_Config/Include directory. Try prepending one or more 'z' characters to the name." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+            Write-Message "LastChildFolderOfIncludeDirectory should have a name that guarantees it is the last folder (alphanumerically) in the /App_Config/Include directory. Try prepending one or more 'z' characters to the name." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
             return $FALSE
         }
     }
 
-    $versionToInstall = Get-SitecoreVersion $config $true
+    $versionToInstall = Get-SitecoreVersion $TRUE
     if ($versionToInstall -eq "8.0")
     {
-        if ((Test-PublishingServerRole $config) -or
-            (Get-ConfigOption $config "WebServer/CDServerSettings/enabled" $TRUE -and Get-ConfigOption $config "WebServer/CDServerSettings/ConfigureFilesForCD"))
+        if ((Test-PublishingServerRole) -or
+            ($script:configSettings.WebServer.CDServerSettings.Enabled -and $script:configSettings.WebServer.CDServerSettings.ConfigureFilesForCD))
         {
             if ([string]::IsNullOrEmpty($folderName))
             {
-                Write-Message $null "LastChildFolderOfIncludeDirectory cannot be null or empty." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+                Write-Message "LastChildFolderOfIncludeDirectory cannot be null or empty." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
                 return $FALSE
             }
         }
     }
 
-    if (Test-PublishingServerRole $config)
+    if (Test-PublishingServerRole)
     {
-        if ([string]::IsNullOrEmpty($config.InstallSettings.WebServer.CMServerSettings.Publishing.PublishingInstance))
+        if ([string]::IsNullOrEmpty($script:configSettings.WebServer.CMServerSettings.Publishing.PublishingInstance))
         {
-            Write-Message $null "PublishingInstance cannot be null or empty." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+            Write-Message "PublishingInstance cannot be null or empty." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
             return $FALSE
         }
 
         [int]$degrees = $null
-        if (!([int32]::TryParse($config.InstallSettings.WebServer.CMServerSettings.Publishing.Parallel.MaxDegreesOfParallelism, [ref]$degrees)))
+        if (!([int32]::TryParse($script:configSettings.WebServer.CMServerSettings.Publishing.Parallel.MaxDegreesOfParallelism, [ref]$degrees)))
         {
-            Write-Message $null "MaxDegreesOfParallelism must be an integer." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+            Write-Message "MaxDegreesOfParallelism must be an integer." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
             return $FALSE
         }
 
         [int]$growthsize = $null
-        if (!([int32]::TryParse($config.InstallSettings.WebServer.CMServerSettings.Publishing.Parallel.WebDatabaseAutoGrowthInMB, [ref]$growthsize)))
+        if (!([int32]::TryParse($script:configSettings.WebServer.CMServerSettings.Publishing.Parallel.WebDatabaseAutoGrowthInMB, [ref]$growthsize)))
         {
-            Write-Message $null "WebDatabaseAutoGrowthInMB must be an integer." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+            Write-Message "WebDatabaseAutoGrowthInMB must be an integer." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
             return $FALSE
         }
         elseif ($growthsize -lt 10)
         {
-            Write-Message $null "WebDatabaseAutoGrowthInMB cannot be less than 10MB." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+            Write-Message "WebDatabaseAutoGrowthInMB cannot be less than 10MB." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
             return $FALSE
         }
         elseif ($growthsize -gt 100)
         {
-            Write-Message $null "WebDatabaseAutoGrowthInMB cannot be greater than 100MB." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+            Write-Message "WebDatabaseAutoGrowthInMB cannot be greater than 100MB." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
             return $FALSE
         }
 
         [int]$timeout = $null
-        if ([int32]::TryParse($config.InstallSettings.WebServer.CMServerSettings.Publishing.AppPoolIdleTimeout, [ref]$timeout))
+        if ([int32]::TryParse($script:configSettings.WebServer.CMServerSettings.Publishing.AppPoolIdleTimeout, [ref]$timeout))
         {
             if ($timeout -gt 43200)
             {
-                Write-Message $null "AppPoolIdleTimeout must be less than or equal to 43200." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+                Write-Message "AppPoolIdleTimeout must be less than or equal to 43200." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
                 return $FALSE
             }
         }
         else
         {
-            Write-Message $null "AppPoolIdleTimeout must be an integer." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+            Write-Message "AppPoolIdleTimeout must be an integer." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
             return $FALSE
         }
     }
 
     return $TRUE
 }
+#endregion
 
-function Get-SubstituteDatabaseFileName($currentFileName, $dbName)
+#region Main Body
+function Copy-DatabaseFiles([string]$zipPath)
 {
-    # Function assumes name format will be Sitecore.{$dbname}.{ldf|mdf}
-    $prefix = $currentFileName.Substring(0,8)
-    $suffix = $currentFileName.Substring($currentFileName.Length-3)
-    return ("{0}.{1}.{2}" -f $prefix,$dbName,$suffix)
-}
+    $dbFolderPath = Get-DatabaseInstallFolderPath $FALSE
 
-function Copy-DatabaseFiles([xml]$config, [string]$zipPath)
-{
-    $dbFolderPath =  Get-DatabaseInstallFolderPath $config $FALSE
-
-    Write-Message $config "Extracting database files from $zipPath to $dbFolderPath" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+    Write-Message "Extracting database files from $zipPath to $dbFolderPath" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
 
     if (!(Test-Path $dbFolderPath))
     {
@@ -924,7 +1303,7 @@ function Copy-DatabaseFiles([xml]$config, [string]$zipPath)
 
         if (Test-Path $filePath)
         {
-            Write-Message $config "$filePath already exists, skipping extraction" "Yellow" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+            Write-Message "$filePath already exists, skipping extraction" "Yellow" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
         }
         else
         {
@@ -933,10 +1312,9 @@ function Copy-DatabaseFiles([xml]$config, [string]$zipPath)
             if ($childItem.Name.ToLower() -like "sitecore.web.*")
             {
                 # Make copies of the web Database as required
-                $dbCopies = $config.InstallSettings.Database.WebDatabaseCopies
-                foreach ($copy in $dbCopies.copy)
+                foreach ($copy in $script:configSettings.Database.WebDatabaseCopies)
                 {
-                    $copyFilePath = Join-Path $dbFolderPath -ChildPath (Get-SubstituteDatabaseFileName $childItem.Name $copy.Trim())
+                    $copyFilePath = Join-Path $dbFolderPath -ChildPath (Get-SubstituteDatabaseFileName $childItem.Name $copy)
                     Copy-Item $filePath $copyFilePath
                 }
             }
@@ -949,32 +1327,32 @@ function Copy-DatabaseFiles([xml]$config, [string]$zipPath)
         }
     }
 
-    Write-Message $config "Database files copied." "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+    Write-Message "Database files copied." "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
 }
 
-function Copy-SitecoreFiles([xml]$config)
+function Copy-SitecoreFiles
 {
-    Write-Message $config "`nCopying Sitecore files..." "Green" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+    Write-Message "`nCopying Sitecore files..." "Green" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
 
-    $zipPath = $config.InstallSettings.SitecoreZipPath
-    $installPath = Join-Path $config.InstallSettings.WebServer.SitecoreInstallRoot -ChildPath $config.InstallSettings.WebServer.SitecoreInstallFolder
+    $zipPath = $script:configSettings.SitecoreZipPath
+    $installPath = $script:configSettings.WebServer.SitecoreInstallPath
 
     $shell = New-Object -com shell.application
 
-    Write-Message $config "Extracting files from $zipPath to $installPath" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+    Write-Message "Extracting files from $zipPath to $installPath" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
 
     # Copy Data folder
     $folderName = "Data"
     $folderPath = Join-Path $installPath -ChildPath $folderName
     if (Test-Path $folderPath)
     {
-        Write-Message $config "$folderPath already exists, skipping extraction" "Yellow" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        Write-Message "$folderPath already exists, skipping extraction" "Yellow" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     }
     else
     {
         $item = Find-FolderInZipFile $shell.NameSpace($zipPath).Items() $folderName
         $shell.NameSpace($installPath).CopyHere($item)
-        Write-Message $config "$folderName folder copied." "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        Write-Message "$folderName folder copied." "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     }
 
     # Copy Website folder
@@ -982,57 +1360,47 @@ function Copy-SitecoreFiles([xml]$config)
     $folderPath = Join-Path $installPath -ChildPath $folderName
     if (Test-Path $folderPath)
     {
-        Write-Message $config "$folderPath already exists, skipping extraction" "Yellow" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        Write-Message "$folderPath already exists, skipping extraction" "Yellow" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     }
     else
     {
         $item = Find-FolderInZipFile $shell.NameSpace($zipPath).Items() $folderName
         $shell.NameSpace($installPath).CopyHere($item)
-        Write-Message $config "$folderName folder copied." "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        Write-Message "$folderName folder copied." "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     }
 
-    if (Get-ConfigOption $config "Database/InstallDatabase")
+    if ($script:configSettings.Database.InstallDatabase)
     {
-        Copy-DatabaseFiles $config $zipPath
+        Copy-DatabaseFiles $zipPath
     }
     else
     {
-        Write-Message $config "Skipping database file extraction: InstallDatabase option is false" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        Write-Message "Skipping database file extraction: InstallDatabase option is false" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     }
     
     $licenseInstallPath = Join-Path $installPath -ChildPath "Data\license.xml"
-    Copy-Item -Path $config.InstallSettings.WebServer.LicenseFilePath -Destination $licenseInstallPath
+    Copy-Item -Path $script:configSettings.WebServer.LicenseFilePath -Destination $licenseInstallPath
 
-    Write-Message $config "File copying done!" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+    Write-Message "File copying done!" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
 }
 
-function Get-DatabaseNames([xml]$config)
+function Attach-SitecoreDatabase([string]$databaseName, [Microsoft.SqlServer.Management.Smo.Server]$sqlServerSmo)
 {
-    return $config.InstallSettings.Database.DatabaseNames.name
-}
+    $fullDatabaseName = $script:configSettings.Database.DatabaseNamePrefix + $databaseName
 
-function Get-DatabaseNamePrefix([xml]$config)
-{
-    return ("{0}" -f $config.InstallSettings.Database.DatabaseNamePrefix.Trim())
-}
-
-function Attach-SitecoreDatabase([xml]$config, [string]$databaseName, [Microsoft.SqlServer.Management.Smo.Server]$sqlServerSmo)
-{
-    $fullDatabaseName = (Get-DatabaseNamePrefix $config) + $databaseName
-
-    if (!(Get-ConfigOption $config "Database/InstallDatabase"))
+    if (!$script:configSettings.Database.InstallDatabase)
     {
-        Write-Message $config "Skipping database attach: InstallDatabase option is false" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        Write-Message "Skipping database attach: InstallDatabase option is false" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
         return $fullDatabaseName
     }
 
     if ($sqlServerSmo.databases[$fullDatabaseName] -eq $null)
     {
         $message = "Attaching database $fullDatabaseName to " + $sqlServerSmo.Name
-        Write-Message $config $message "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        Write-Message $message "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
 
         # Get paths of the data and log file
-        $dbFolderPath = Get-DatabaseInstallFolderPath $config $TRUE
+        $dbFolderPath = Get-DatabaseInstallFolderPath $TRUE
         if (!($dbFolderPath.EndsWith("\")))
         {
             $dataFilePath = $dbFolderPath + "\"
@@ -1052,27 +1420,27 @@ function Attach-SitecoreDatabase([xml]$config, [string]$databaseName, [Microsoft
         }
         catch
         {
-            Write-Message $config $_.Exception "Red" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+            Write-Message ($_.Exception) "Red" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
         }
     }
     else
     {
         $message = "Database $fullDatabaseName already exists on " + $sqlServerSmo.Name
-        Write-Message $config $message "Yellow" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        Write-Message $message "Yellow" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     }
 
     return $fullDatabaseName
 }
 
-function Set-DatabaseRoles([xml]$config, [string]$databaseName, [Microsoft.SqlServer.Management.Smo.Server]$sqlServerSmo)
+function Set-DatabaseRoles([string]$databaseName, [Microsoft.SqlServer.Management.Smo.Server]$sqlServerSmo)
 {
-    $loginName = Get-SqlLoginAccountForDataAccess $config
+    $loginName = Get-SqlLoginAccountForDataAccess
 
     # Add database mapping
     $database = $sqlServerSmo.Databases[$databaseName]
     if ($database.Users[$loginName])
     {
-        Write-Message $config "Dropping user from $database" "Yellow" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        Write-Message "Dropping user from $database" "Yellow" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
         $database.Users[$loginName].Drop()
     }
     $dbUser = New-Object -TypeName Microsoft.SqlServer.Management.Smo.User -ArgumentList $database, $loginName
@@ -1093,16 +1461,16 @@ function Set-DatabaseRoles([xml]$config, [string]$databaseName, [Microsoft.SqlSe
     # Assign database roles user
     foreach ($roleName in $roles)
     {
-        Write-Message $config "Adding $roleName role for $loginName on $database" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        Write-Message "Adding $roleName role for $loginName on $database" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
         $dbrole = $database.Roles[$roleName]
         $dbrole.AddMember($loginName)
         $dbrole.Alter | Out-Null
     }
 }
 
-function Grant-DatabasePermissions([xml]$config, [string]$databaseName, [Microsoft.SqlServer.Management.Smo.Server]$sqlServerSmo)
+function Grant-DatabasePermissions([string]$databaseName, [Microsoft.SqlServer.Management.Smo.Server]$sqlServerSmo)
 {
-    $loginName = Get-SqlLoginAccountForDataAccess $config
+    $loginName = Get-SqlLoginAccountForDataAccess
 
     $database = $sqlServerSmo.Databases[$databaseName]
     $permset = New-Object Microsoft.SqlServer.Management.Smo.DatabasePermissionSet 
@@ -1110,16 +1478,16 @@ function Grant-DatabasePermissions([xml]$config, [string]$databaseName, [Microso
     $database.Grant($permset, $loginName)
     $database.Alter();
 
-    Write-Message $config "Granted Execute permission to $loginName on $database" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+    Write-Message "Granted Execute permission to $loginName on $database" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
 }
 
-function Set-DatabaseGrowth([xml]$config, [string]$databaseName, [Microsoft.SqlServer.Management.Smo.Server]$sqlServerSmo)
+function Set-DatabaseGrowth([string]$databaseName, [Microsoft.SqlServer.Management.Smo.Server]$sqlServerSmo)
 {
-    $fullDatabaseName = (Get-DatabaseNamePrefix $config) + $databaseName
+    $fullDatabaseName = $script:configSettings.Database.DatabaseNamePrefix + $databaseName
     $database = $sqlServerSmo.Databases[$fullDatabaseName]
-    [int]$growthsize = $config.InstallSettings.WebServer.CMServerSettings.Publishing.Parallel.WebDatabaseAutoGrowthInMB
+    [int]$growthsize = $script:configSettings.WebServer.CMServerSettings.Publishing.Parallel.WebDatabaseAutoGrowthInMB
 
-    Write-Message $config "Setting Autogrowth size for $fullDatabaseName to $($growthsize)MB" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+    Write-Message "Setting Autogrowth size for $fullDatabaseName to $($growthsize)MB" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
 
     foreach ($file in $database.FileGroups.Files)
     {
@@ -1136,44 +1504,44 @@ function Set-DatabaseGrowth([xml]$config, [string]$databaseName, [Microsoft.SqlS
     }
 }
 
-function Initialize-SitecoreDatabases([xml]$config)
+function Initialize-SitecoreDatabases
 {
-    Write-Message $config "`nInitializing Sitecore Databases..." "Green" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+    Write-Message "`nInitializing Sitecore Databases..." "Green" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
 
-    [Microsoft.SqlServer.Management.Smo.Server]$sqlServerSmo = Get-SqlServerSmo $config
+    [Microsoft.SqlServer.Management.Smo.Server]$sqlServerSmo = Get-SqlServerSmo
 
-    $databaseNames = (Get-DatabaseNames $config)
+    $databaseNames = $script:configSettings.Database.DatabaseNames
     $webDatabaseNames = New-Object 'System.Collections.Generic.List[string]'
     $webDatabaseNames.Add("Web")
-    foreach ($copy in $config.InstallSettings.Database.WebDatabaseCopies.copy)
+    foreach ($copy in $script:configSettings.Database.WebDatabaseCopies)
     {
-        $databaseNames += $copy.Trim()
-        $webDatabaseNames.Add($copy.Trim())
+        $databaseNames.Add($copy)
+        $webDatabaseNames.Add($copy)
     }
 
     foreach ($dbname in $databaseNames)
     {
-        $fullDatabaseName = Attach-SitecoreDatabase $config $dbname $sqlServerSmo
-        Set-DatabaseRoles $config $fullDatabaseName $sqlServerSmo
-        Grant-DatabasePermissions $config $fullDatabaseName $sqlServerSmo
+        $fullDatabaseName = Attach-SitecoreDatabase $dbname $sqlServerSmo
+        Set-DatabaseRoles $fullDatabaseName $sqlServerSmo
+        Grant-DatabasePermissions $fullDatabaseName $sqlServerSmo
     }
 
     foreach ($webDbName in $webDatabaseNames)
     {
-        Set-DatabaseGrowth $config $webDbName $sqlServerSmo
+        Set-DatabaseGrowth $webDbName $sqlServerSmo
     }
 
-    Write-Message $config "Database initialization complete!" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+    Write-Message "Database initialization complete!" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
 }
 
-function Set-ApplicationPoolIdentity([xml]$config, $pool)
+function Set-ApplicationPoolIdentity($pool)
 {
-    $pool.processModel.userName = $config.InstallSettings.WebServer.AppPoolIdentity
+    $pool.processModel.userName = $script:configSettings.WebServer.AppPoolIdentity
     
-    if ($config.InstallSettings.WebServer.AppPoolIdentity -ne "ApplicationPoolIdentity" -and $config.InstallSettings.WebServer.AppPoolIdentity -ne "NetworkService")
+    if ($script:configSettings.WebServer.AppPoolIdentity -ne "ApplicationPoolIdentity" -and $script:configSettings.WebServer.AppPoolIdentity -ne "NetworkService")
     {
         # Using a service account
-        $pool.processModel.password = $config.InstallSettings.WebServer.AppPoolIdentityPassword
+        $pool.processModel.password = $script:configSettings.WebServer.AppPoolIdentityPassword
         # Set identity type for a "SpecificUser"
         $pool.processModel.identityType = 3
     }
@@ -1186,10 +1554,10 @@ function Set-ApplicationPoolIdentity([xml]$config, $pool)
         $identityName = "IIS APPPOOL\$appPoolName"
     }
 
-    Write-Message $config "Identity of application pool is $identityName" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+    Write-Message "Identity of application pool is $identityName" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
 }
 
-function Add-IpRestrictionsToTarget([xml]$config, [string]$target, [string]$iisSiteName)
+function Add-IpRestrictionsToTarget([string]$target, [string]$iisSiteName)
 {
     $pspath = "IIS:\"
     $filter = "/system.webserver/security/ipSecurity"
@@ -1199,55 +1567,54 @@ function Add-IpRestrictionsToTarget([xml]$config, [string]$target, [string]$iisS
  
     Set-WebConfigurationProperty -PSPath $pspath -Filter $filter -Name $propertyName -Value $propertyValue -Location $location
 
-    Write-Message $config "Denying all unspecified clients for $target" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+    Write-Message "Denying all unspecified clients for $target" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
 
-    $whiteList = $config.InstallSettings.WebServer.IPWhiteList
-    foreach ($ip in $whiteList.IP)
+    foreach ($ip in $script:configSettings.WebServer.IPWhiteList)
     {
         Add-WebConfiguration -pspath $pspath -filter $filter -value @{ipAddress=$ip;allowed="true"} -Location $location
-        Write-Message $config "$ip added to IP whitelist for $target" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        Write-Message "$ip added to IP whitelist for $target" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     }
 }
 
-function Set-IpRestrictions([xml]$config, [string]$iisSiteName)
+function Set-IpRestrictions([string]$iisSiteName)
 {
     $targetItems = @("sitecore/admin", "sitecore/shell", "sitecore/login", "sitecore/default.aspx")
     foreach ($target in $targetItems)
     {
-        Add-IpRestrictionsToTarget $config $target $iisSiteName
+        Add-IpRestrictionsToTarget $target $iisSiteName
     }
 }
 
-function Initialize-WebSite([xml]$config)
+function Initialize-WebSite
 {
-    Write-Message $config "`nInitializing site in IIS..." "Green" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+    Write-Message "`nInitializing site in IIS..." "Green" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
 
-    $siteName = $config.InstallSettings.WebServer.IISWebSiteName
+    $siteName = $script:configSettings.WebServer.IISWebSiteName
 
     # Setup application pool
     $appPoolName = $siteName + "AppPool"
     if(Test-Path IIS:\AppPools\$appPoolName)
     {
-        Write-Message $config "Application pool named $appPoolName already exists" "Yellow" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        Write-Message "Application pool named $appPoolName already exists" "Yellow" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     }
     else
     {
-        Write-Message $config "Provisioning new application pool in IIS - $appPoolName" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        Write-Message "Provisioning new application pool in IIS - $appPoolName" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
         New-WebAppPool -Name $appPoolName -force | Out-Null
 
         $pool = Get-Item IIS:\AppPools\$appPoolName
-        Set-ApplicationPoolIdentity $config $pool
-        $pool.managedRuntimeVersion = $config.InstallSettings.WebServer.DefaultRuntimeVersion
+        Set-ApplicationPoolIdentity $pool
+        $pool.managedRuntimeVersion = $script:configSettings.WebServer.DefaultRuntimeVersion
         $pool.processModel.loadUserProfile = $TRUE
         $pool.processModel.maxProcesses = 1
 
-        if (Test-PublishingServerRole $config)
+        if (Test-PublishingServerRole)
         {
             $pool.startMode = "AlwaysRunning"
-            [int]$timeout = $config.InstallSettings.WebServer.CMServerSettings.Publishing.AppPoolIdleTimeout
+            [int]$timeout = $script:configSettings.WebServer.CMServerSettings.Publishing.AppPoolIdleTimeout
             if ($timeout -gt $pool.recycling.periodicRestart.time.TotalMinutes)
             {
-                Write-Message $config "AppPoolIdleTimeout of $timeout minutes cannot be greater than the app pool's periodic restart time, using $($pool.recycling.periodicRestart.time.TotalMinutes) minutes instead." "Yellow" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+                Write-Message "AppPoolIdleTimeout of $timeout minutes cannot be greater than the app pool's periodic restart time, using $($pool.recycling.periodicRestart.time.TotalMinutes) minutes instead." "Yellow" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
                 $timeout = $pool.recycling.periodicRestart.time.TotalMinutes
             }
             $pool.processModel.idleTimeout = [TimeSpan]::FromMinutes($timeout)
@@ -1260,16 +1627,15 @@ function Initialize-WebSite([xml]$config)
     $iisSiteName = $sitename
     if(Test-Path IIS:\Sites\$iisSiteName)
     {
-        Write-Message $config  "A site named $iisSiteName already exists in IIS" "Yellow" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        Write-Message "A site named $iisSiteName already exists in IIS" "Yellow" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     }
     else
     {
-        Write-Message $config "Provisioning new IIS site name $iisSiteName" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
-        $installPath = Join-Path $config.InstallSettings.WebServer.SitecoreInstallRoot -ChildPath $config.InstallSettings.WebServer.SitecoreInstallFolder
+        Write-Message "Provisioning new IIS site name $iisSiteName" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        $installPath = $script:configSettings.WebServer.SitecoreInstallPath
         $sitePath = Join-Path $installPath -ChildPath "Website"        
-        $bindings = $config.InstallSettings.WebServer.IISBindings.Binding
         $bindingIndex = 1
-        foreach ($binding in $bindings)
+        foreach ($binding in $script:configSettings.WebServer.IISBindings)
         {
             if ($bindingIndex -eq 1)
             {
@@ -1292,7 +1658,7 @@ function Initialize-WebSite([xml]$config)
                     $hostEntry += "`n########################"
                 }
 
-                Write-Message $config "Add $($binding.HostHeader) to hosts file" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+                Write-Message "Add $($binding.HostHeader) to hosts file" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
                 $ip = $binding.IP
                 if ($ip -eq "*")
                 {
@@ -1306,42 +1672,14 @@ function Initialize-WebSite([xml]$config)
         }
     }
 
-    Write-Message $config "IIS site initialization complete!" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+    Write-Message "IIS site initialization complete!" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
 
     return $iisSiteName
 }
 
-function Get-BaseConnectionString([xml]$config)
+function Get-FilesToDisableOnCDServer
 {
-    $sqlServerName = $config.InstallSettings.Database.SqlServerName
-    
-    if (Get-ConfigOption $config "Database/UseWindowsAuthenticationForSqlDataAccess")
-    {
-        $baseConnectionString = "Server=$sqlServerName;Trusted_Connection=Yes;Database="
-    }
-    else
-    {
-        if ([string]::IsNullOrEmpty($config.InstallSettings.Database.SqlLoginForDataAccess))
-        {
-            $loginName = $config.InstallSettings.Database.SqlLoginForInstall
-            $loginPassword = $config.InstallSettings.Database.SqlLoginForInstallPassword
-        }
-        else
-        {
-            $loginName = $config.InstallSettings.Database.SqlLoginForDataAccess
-            $loginPassword = $config.InstallSettings.Database.SqlLoginForDataAccessPassword
-        }
-
-        $baseConnectionString = "user id=$loginName;password=$loginPassword;Data Source=$sqlServerName;Database="
-    }
-
-    return $baseConnectionString
-}
-
-function Get-FilesToDisableOnCDServer([xml]$config)
-{
-    $installPath = Join-path $config.InstallSettings.WebServer.SitecoreInstallRoot -ChildPath $config.InstallSettings.WebServer.SitecoreInstallFolder
-    $webrootPath = Join-Path $installPath -ChildPath "Website"
+    $webrootPath = Join-Path $script:configSettings.WebServer.SitecoreInstallPath -ChildPath "Website"
 
     # Based on https://doc.sitecore.net/sitecore_experience_platform/80/xdb_configuration/configure_a_content_delivery_server
     $filesFor80 = @(
@@ -1497,7 +1835,7 @@ function Get-FilesToDisableOnCDServer([xml]$config)
                    "App_Config\Include\Social\Sitecore.Social.Solr.IndexConfiguration.config"
                    )
 
-    [decimal]$sitecoreVersion = Get-SitecoreVersion $config
+    [decimal]$sitecoreVersion = Get-SitecoreVersion
     if ($sitecoreVersion -eq "8.0")
     {        
         return $filesFor80 | % { Join-Path $webrootPath -ChildPath $_ }
@@ -1512,29 +1850,28 @@ function Get-FilesToDisableOnCDServer([xml]$config)
     }
 }
 
-function Disable-FilesForCDServer([xml]$config)
+function Disable-FilesForCDServer
 {
-    Write-Message $config "Disabling files not needed on CD server." "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
-    foreach ($file in Get-FilesToDisableOnCDServer $config)
+    Write-Message "Disabling files not needed on CD server." "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+    foreach ($file in Get-FilesToDisableOnCDServer)
     {        
         if (Test-Path $file)
         {
             $fileName = Split-Path $file -leaf
             $newName = $fileName + ".disabled"
             Rename-Item -Path $file -NewName $newName
-            Write-Message $config "Disabled: $file" "White" -WriteToLogOnly $TRUE -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+            Write-Message "Disabled: $file" "White" -WriteToLogOnly $TRUE -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
         }
         else
         {
-            Write-Message $config "File not found on server: $file" "Yellow" -WriteToLogOnly $TRUE -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+            Write-Message "File not found on server: $file" "Yellow" -WriteToLogOnly $TRUE -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
         }
     }
 }
 
-function Get-FilesToEnableOnCDServer([xml]$config)
+function Get-FilesToEnableOnCDServer
 {
-    $installPath = Join-path $config.InstallSettings.WebServer.SitecoreInstallRoot -ChildPath $config.InstallSettings.WebServer.SitecoreInstallFolder
-    $webrootPath = Join-Path $installPath -ChildPath "Website"
+    $webrootPath = Join-Path $script:configSettings.WebServer.SitecoreInstallPath -ChildPath "Website"
 
     # Based on https://doc.sitecore.net/sitecore_experience_platform/80/xdb_configuration/configure_a_content_delivery_server
     $filesFor80 = @(
@@ -1561,7 +1898,7 @@ function Get-FilesToEnableOnCDServer([xml]$config)
                    "App_Config\Include\Social\Sitecore.Social.ScalabilitySettings.config"
                    )
 
-    [decimal]$sitecoreVersion = Get-SitecoreVersion $config
+    [decimal]$sitecoreVersion = Get-SitecoreVersion
     if ($sitecoreVersion -eq "8.0")
     {        
         return $filesFor80 | % { Join-Path $webrootPath -ChildPath $_ }
@@ -1576,10 +1913,10 @@ function Get-FilesToEnableOnCDServer([xml]$config)
     }
 }
 
-function Enable-FilesForCDServer([xml]$config)
+function Enable-FilesForCDServer
 {
-    Write-Message $config "Enabling files required by a CD server." "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
-    foreach ($fileToEnable in Get-FilesToEnableOnCDServer $config)
+    Write-Message "Enabling files required by a CD server." "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+    foreach ($fileToEnable in Get-FilesToEnableOnCDServer)
     {
         if (Test-Path $fileToEnable)
         {
@@ -1592,10 +1929,10 @@ function Enable-FilesForCDServer([xml]$config)
             $filename = Split-Path $fileToEnable -leaf
             if ($filename -eq "SwitchMasterToWeb.config")
             {
-                [decimal]$sitecoreVersion = Get-SitecoreVersion $config
+                [decimal]$sitecoreVersion = Get-SitecoreVersion
                 if ($sitecoreVersion -eq 8.0)
                 {        
-                    $foldername = $config.InstallSettings.WebServer.LastChildFolderOfIncludeDirectory
+                    $foldername = $script:configSettings.WebServer.LastChildFolderOfIncludeDirectory
                     $folderPath = Join-Path (Split-Path $fileToEnable) -ChildPath $foldername
                 
                     # Create a new folder, this folder should be named so as to be patched last
@@ -1605,7 +1942,7 @@ function Enable-FilesForCDServer([xml]$config)
                 }
                 elseif ($sitecoreVersion -eq 8.1)
                 {
-                    $newFolderName = $config.InstallSettings.WebServer.LastChildFolderOfIncludeDirectory
+                    $newFolderName = $script:configSettings.WebServer.LastChildFolderOfIncludeDirectory
                     if (!([string]::IsNullOrEmpty($newFolderName)))
                     {
                         # Change name of folder to LastChildFolderOfIncludeDirectory
@@ -1621,19 +1958,18 @@ function Enable-FilesForCDServer([xml]$config)
             }
 
             Copy-Item -Path $match -Destination $fileToEnable
-            Write-Message $config "Enabled: $fileToEnable" "White" -WriteToLogOnly $TRUE -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+            Write-Message "Enabled: $fileToEnable" "White" -WriteToLogOnly $TRUE -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
         }
         else
         {
-            Write-Message $config "File not found on server: $fileToEnable" "Yellow" -WriteToLogOnly $TRUE -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+            Write-Message "File not found on server: $fileToEnable" "Yellow" -WriteToLogOnly $TRUE -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
         }
     }
 }
 
-function Get-FilesToEnableOnPublishingServer([xml]$config)
+function Get-FilesToEnableOnPublishingServer
 {
-    $installPath = Join-path $config.InstallSettings.WebServer.SitecoreInstallRoot -ChildPath $config.InstallSettings.WebServer.SitecoreInstallFolder
-    $webrootPath = Join-Path $installPath -ChildPath "Website"
+    $webrootPath = Join-Path $script:configSettings.WebServer.SitecoreInstallPath -ChildPath "Website"
 
     $files = @(
                "App_Config\Include\Sitecore.Publishing.DedicatedInstance.config",
@@ -1647,10 +1983,10 @@ function Get-FilesToEnableOnPublishingServer([xml]$config)
     return $files | % { Join-Path $webrootPath -ChildPath $_ }
 }
 
-function Enable-FilesForPublishingServer([xml]$config)
+function Enable-FilesForPublishingServer
 {
-    Write-Message $config "Enabling files required by a Publishing server." "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
-    foreach ($file in Get-FilesToEnableOnPublishingServer $config)
+    Write-Message "Enabling files required by a Publishing server." "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+    foreach ($file in Get-FilesToEnableOnPublishingServer)
     {
         if (Test-Path $file)
         {
@@ -1663,10 +1999,10 @@ function Enable-FilesForPublishingServer([xml]$config)
             $filename = Split-Path $file -leaf
             if ($filename -eq "Sitecore.Publishing.DedicatedInstance.config")
             {
-                [decimal]$sitecoreVersion = Get-SitecoreVersion $config
+                [decimal]$sitecoreVersion = Get-SitecoreVersion
                 if ($sitecoreVersion -eq 8.0)
                 {        
-                    $foldername = $config.InstallSettings.WebServer.LastChildFolderOfIncludeDirectory
+                    $foldername = $script:configSettings.WebServer.LastChildFolderOfIncludeDirectory
                     $filepath = Join-Path (Split-Path $file) -ChildPath $foldername
                 
                     # Create a new folder, this folder should be named so as to be patched last
@@ -1678,7 +2014,7 @@ function Enable-FilesForPublishingServer([xml]$config)
                     $folderPath = Join-Path (Split-Path $file) -ChildPath "Z.SwitchMasterToWeb"
                     $filepath = $folderPath
 
-                    $newFolderName = $config.InstallSettings.WebServer.LastChildFolderOfIncludeDirectory
+                    $newFolderName = $script:configSettings.WebServer.LastChildFolderOfIncludeDirectory
                     if (!([string]::IsNullOrEmpty($newFolderName)))
                     {
                         # Change name of 8.1's built-in folder to LastChildFolderOfIncludeDirectory
@@ -1691,29 +2027,29 @@ function Enable-FilesForPublishingServer([xml]$config)
             }
             elseif ($filename -eq "Sitecore.Publishing.Parallel.config")
             {
-                if (!(Get-ConfigOption $config "WebServer/CMServerSettings/Publishing/Parallel/enabled" $TRUE))
+                if (!$script:configSettings.WebServer.CMServerSettings.Publishing.Parallel.Enabled)
                 {
                     continue
                 }
             }
 
             Copy-Item -Path $match -Destination $file
-            Write-Message $config "Enabled: $file" "White" -WriteToLogOnly $TRUE -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+            Write-Message "Enabled: $file" "White" -WriteToLogOnly $TRUE -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
         }
         else
         {
-            Write-Message $config "File not found on server: $file" "Yellow" -WriteToLogOnly $TRUE -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+            Write-Message "File not found on server: $file" "Yellow" -WriteToLogOnly $TRUE -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
         }        
     }
 }
 
-function Set-ConfigurationFiles([xml]$config)
+function Set-ConfigurationFiles
 {
-    Write-Message $config "`nWriting changes to config files..." "Green" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+    Write-Message "`nWriting changes to config files..." "Green" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
 
-    [decimal]$sitecoreVersion = Get-SitecoreVersion $config
+    [decimal]$sitecoreVersion = Get-SitecoreVersion
     $backupFiles = New-Object 'System.Collections.Generic.List[string]'
-    $installPath = Join-path $config.InstallSettings.WebServer.SitecoreInstallRoot -ChildPath $config.InstallSettings.WebServer.SitecoreInstallFolder
+    $installPath = $script:configSettings.WebServer.SitecoreInstallPath
     $currentDate = (Get-Date).ToString("yyyyMMdd_hh-mm-s")
 
     #region Edit sitecore.config
@@ -1722,7 +2058,7 @@ function Set-ConfigurationFiles([xml]$config)
         $sitecoreConfigPath = Join-Path $installPath -ChildPath "Website\App_Config\sitecore.config"
         $sitecoreConfig = [xml](Get-Content $sitecoreConfigPath)
         $backup = $sitecoreConfigPath + "__$currentDate"
-        Write-Message $config "Backing up sitecore.config" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        Write-Message "Backing up sitecore.config" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
         $sitecoreConfig.Save($backup)
         $backupFiles.Add($backup)
 
@@ -1730,7 +2066,7 @@ function Set-ConfigurationFiles([xml]$config)
         $dataFolderPath = Join-Path $installPath -ChildPath "Data"
         $sitecoreConfig.SelectSingleNode("sitecore/sc.variable[@name='dataFolder']").SetAttribute("value", $dataFolderPath)
 
-        Write-Message $config "Saving sitecore.config" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        Write-Message "Saving sitecore.config" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
         $sitecoreConfig.Save($sitecoreConfigPath)
     }
     #endregion
@@ -1739,7 +2075,7 @@ function Set-ConfigurationFiles([xml]$config)
     $webConfigPath = Join-Path $installPath -ChildPath "Website\web.config"
     $webconfig = [xml](Get-Content $webConfigPath)
     $backup = $webConfigPath + "__$currentDate"
-    Write-Message $config "Backing up Web.config" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+    Write-Message "Backing up Web.config" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     $webconfig.Save($backup)
     $backupFiles.Add($backup)
 
@@ -1750,21 +2086,21 @@ function Set-ConfigurationFiles([xml]$config)
     }
 
     # Modify sessionState element    
-    if ($config.InstallSettings.WebServer.SessionStateProvider.Private.ToLower() -eq "mssql")
+    if ($script:configSettings.WebServer.SessionStateProvider.Private.ToLower() -eq "mssql")
     {
         $webconfig.configuration.SelectSingleNode("system.web/sessionState").SetAttribute("mode", "Custom")
         $webconfig.configuration.SelectSingleNode("system.web/sessionState").SetAttribute("customProvider", "mssql")
-        Write-Message $config "Changing private session state provider to MSSQL" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        Write-Message "Changing private session state provider to MSSQL" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     }
 
     # Disable Sitecore's Upload Watcher
-    if (Get-ConfigOption $config "WebServer/CDServerSettings/DisableUploadWatcher")
+    if ($script:configSettings.WebServer.CDServerSettings.DisableUploadWatcher)
     {
         $node = $webconfig.configuration.SelectSingleNode("system.webServer/modules/add[@name='SitecoreUploadWatcher']")
         $node.ParentNode.InnerXml = $node.ParentNode.InnerXml.Replace($node.OuterXml, $node.OuterXml.Insert(0, "<!--").Insert($node.OuterXml.Length+4, "-->"))
     }
 
-    Write-Message $config "Saving changes to Web.config" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+    Write-Message "Saving changes to Web.config" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     $webconfig.Save($webConfigPath)
     #endregion
 
@@ -1772,15 +2108,15 @@ function Set-ConfigurationFiles([xml]$config)
     $connectionStringsPath = Join-Path $installPath -ChildPath "Website\App_Config\ConnectionStrings.config"
     $connectionStringsConfig = [xml](Get-Content $connectionStringsPath)
     $backup = $connectionStringsPath + "__$currentDate"
-    Write-Message $config "Backing up ConnectionStrings.config" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+    Write-Message "Backing up ConnectionStrings.config" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     $connectionStringsConfig.Save($backup)
     $backupFiles.Add($backup)
 
-    $baseConnectionString = Get-BaseConnectionString $config
-    foreach ($databaseName in (Get-DatabaseNames $config))
+    $baseConnectionString = $script:configSettings.Database.BaseConnectionString
+    foreach ($databaseName in $script:configSettings.Database.DatabaseNames)
     {
         $dbname = $databaseName.ToLower()
-        $fullDatabaseName = (Get-DatabaseNamePrefix $config) + $databaseName
+        $fullDatabaseName = $script:configSettings.Database.DatabaseNamePrefix + $databaseName
         $connectionString = $baseConnectionString + $fullDatabaseName + ";"
 
         $node = $connectionStringsConfig.SelectSingleNode("connectionStrings/add[@name='$dbname']")
@@ -1791,25 +2127,24 @@ function Set-ConfigurationFiles([xml]$config)
     }
 
     # Add additional connection strings for each web database copy
-    $dbCopies = $config.InstallSettings.Database.WebDatabaseCopies
-    foreach ($copy in $dbCopies.copy)
+    foreach ($copy in $script:configSettings.Database.WebDatabaseCopies)
     {
         $dbElement = $connectionStringsConfig.CreateElement("add")
 
         $dbAttr = $connectionStringsConfig.CreateAttribute("name")
-        $dbAttr.Value = $copy.Trim()
+        $dbAttr.Value = $copy
         $dbElement.Attributes.Append($dbAttr) | Out-Null
         
         $dbAttr = $connectionStringsConfig.CreateAttribute("connectionString")
-        $dbAttr.Value = $baseConnectionString + (Get-DatabaseNamePrefix $config) + $copy.Trim() + ";"
+        $dbAttr.Value = $baseConnectionString + $script:configSettings.Database.DatabaseNamePrefix + $copy + ";"
         $dbElement.Attributes.Append($dbAttr) | Out-Null
 
         $connectionStringsConfig.DocumentElement.AppendChild($dbElement) | Out-Null
-        Write-Message $config "Addedd a $($copy.Trim()) connection string" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        Write-Message "Addedd a $($copy) connection string" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     }
 
     # Optionally add a session connection string
-    if ($config.InstallSettings.WebServer.SessionStateProvider.Private.ToLower() -eq "mssql" -or $config.InstallSettings.WebServer.SessionStateProvider.Private.ToLower() -eq "mssql")
+    if ($script:configSettings.WebServer.SessionStateProvider.Private.ToLower() -eq "mssql" -or $script:configSettings.WebServer.SessionStateProvider.Private.ToLower() -eq "mssql")
     {
         $sessionElement = $connectionStringsConfig.CreateElement("add")
 
@@ -1818,15 +2153,15 @@ function Set-ConfigurationFiles([xml]$config)
         $sessionElement.Attributes.Append($sessionAttr) | Out-Null
 
         $sessionAttr = $connectionStringsConfig.CreateAttribute("connectionString")
-        $sessionAttr.Value = $baseConnectionString + (Get-DatabaseNamePrefix $config) + "Sessions;"
+        $sessionAttr.Value = $baseConnectionString + $script:configSettings.Database.DatabaseNamePrefix + "Sessions;"
         $sessionElement.Attributes.Append($sessionAttr) | Out-Null
 
         $connectionStringsConfig.DocumentElement.AppendChild($sessionElement) | Out-Null
-        Write-Message $config "Addedd a session connection string" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        Write-Message "Addedd a session connection string" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     }
 
     # Modify MongoDB connection strings
-    if (Get-ConfigOption $config "WebServer/MongoDb/enabled" $TRUE)
+    if ($script:configSettings.WebServer.MongoDb.Enabled)
     {
         $mongoNodes = $connectionStringsConfig.SelectNodes("connectionStrings/add[contains(@connectionString, 'mongodb://')]")
         foreach ($node in $mongoNodes)
@@ -1835,16 +2170,15 @@ function Set-ConfigurationFiles([xml]$config)
             $builder = New-Object System.UriBuilder
 
             $credentials = ""            
-            $username = $config.InstallSettings.WebServer.MongoDb.Credentials.Username
-            $password = $config.InstallSettings.WebServer.MongoDb.Credentials.Password        
+            $username = $script:configSettings.WebServer.MongoDb.Credentials.Username
+            $password = $script:configSettings.WebServer.MongoDb.Credentials.Password        
             if ($username.Length -gt 0)
             {
                 $credentials = $username + ":" + $password + "@"
             }
 
             $hostAndPort = ""
-            $hosts = $config.InstallSettings.WebServer.MongoDb.Hosts.Host
-            foreach ($mongohost in $hosts)
+            foreach ($mongohost in $script:configSettings.WebServer.MongoDb.Hosts)
             {
                 if ($hostAndPort.Length -gt 0)
                 {
@@ -1866,20 +2200,20 @@ function Set-ConfigurationFiles([xml]$config)
             }
 
             # Use the same prefix for MongoDB databases as we use for SQL
-            $lastSegment = (Get-DatabaseNamePrefix $config) + $url.Segments[$url.Segments.Count-1]
+            $lastSegment = $script:configSettings.Database.DatabaseNamePrefix + $url.Segments[$url.Segments.Count-1]
             $newSegments = $url.Segments
             $newSegments[$newSegments.Count-1] = $lastSegment
             $databaseName = [string]::Join("",$newSegments)
 
-            $connectionString = ("mongodb://{0}{1}{2}{3}" -f $credentials,$hostAndPort,$databaseName,$config.InstallSettings.WebServer.MongoDb.Options)
+            $connectionString = ("mongodb://{0}{1}{2}{3}" -f $credentials,$hostAndPort,$databaseName,$script:configSettings.WebServer.MongoDb.Options)
             $node.SetAttribute("connectionString", $connectionString)
         }
 
-        Write-Message $config "Changing host name for MongoDb connection strings" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        Write-Message "Changing host name for MongoDb connection strings" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     }
 
     # Comment out connection strings not needed by CD server
-    if (Get-ConfigOption $config "WebServer/CDServerSettings/enabled" $TRUE -and Get-ConfigOption $config "WebServer/CDServerSettings/DeactivateConnectionStrings")
+    if ($script:configSettings.WebServer.CDServerSettings.Enabled -and $script:configSettings.WebServer.CDServerSettings.DeactivateConnectionStrings)
     {
         $node = $connectionStringsConfig.SelectSingleNode("connectionStrings/add[@name='master']")
         $node.ParentNode.InnerXml = $node.ParentNode.InnerXml.Replace($node.OuterXml, $node.OuterXml.Insert(0, "<!--").Insert($node.OuterXml.Length+4, "-->"))
@@ -1890,24 +2224,24 @@ function Set-ConfigurationFiles([xml]$config)
         $node = $connectionStringsConfig.SelectSingleNode("connectionStrings/add[@name='reporting']")
         $node.ParentNode.InnerXml = $node.ParentNode.InnerXml.Replace($node.OuterXml, $node.OuterXml.Insert(0, "<!--").Insert($node.OuterXml.Length+4, "-->"))
 
-        Write-Message $config "Commenting out connection strings not need on CD server" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        Write-Message "Commenting out connection strings not need on CD server" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     }
 
-    Write-Message $config "Saving ConnectionStrings.config" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+    Write-Message "Saving ConnectionStrings.config" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     $connectionStringsConfig.Save($connectionStringsPath)
     #endregion
 
     #region Edit Sitecore.Analytics.Tracker.config
-    if ($config.InstallSettings.WebServer.SessionStateProvider.Shared.ToLower() -eq "mssql")
+    if ($script:configSettings.WebServer.SessionStateProvider.Shared.ToLower() -eq "mssql")
     {
         $trackerPath = Join-Path $installPath -ChildPath "Website\App_Config\Include\Sitecore.Analytics.Tracking.config"
         $trackerConfig = [xml](Get-Content $trackerPath)
         $backup = $trackerPath + "__$currentDate"
-        Write-Message $config "Backing up Sitecore.Analytics.Tracker.config" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        Write-Message "Backing up Sitecore.Analytics.Tracker.config" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
         $trackerConfig.Save($backup)
         $backupFiles.Add($backup)
 
-        Write-Message $config "Changing shared session state provider to MSSQL" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        Write-Message "Changing shared session state provider to MSSQL" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
         $trackerConfig.configuration.SelectSingleNode("sitecore/tracking/sharedSessionState").SetAttribute("defaultProvider", "mssql")
 
         # Delete existing mssql provider if it exists
@@ -1952,38 +2286,38 @@ function Set-ConfigurationFiles([xml]$config)
         # Set sharedSessionState's defaultProvider to mssql
         $node = $trackerConfig.configuration.SelectSingleNode("sitecore/tracking/sharedSessionState").SetAttribute("defaultProvider", "mssql")
 
-        Write-Message $config "Saving changes to Sitecore.Analytics.Tracker.config" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        Write-Message "Saving changes to Sitecore.Analytics.Tracker.config" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
         $trackerConfig.Save($trackerPath)
     }
     #endregion
 
     #region Edit Sitecore.ContentSearch.Solr.DefaultIndexConfiguration.config.example
-    if (!([string]::IsNullOrEmpty($config.InstallSettings.WebServer.Solr.ServiceBaseAddress)))
+    if (!([string]::IsNullOrEmpty($script:configSettings.WebServer.Solr.ServiceBaseAddress)))
     {
         $solrConfigPath = Join-Path $installPath -ChildPath "Website\App_Config\Include\Sitecore.ContentSearch.Solr.DefaultIndexConfiguration.config.example"
         $solrConfig = [xml](Get-Content $solrConfigPath)
         $currentDate = (Get-Date).ToString("yyyyMMdd_hh-mm-s")
         $backup = $solrConfigPath + "__$currentDate"
-        Write-Message $config "Backing up Sitecore.ContentSearch.Solr.DefaultIndexConfiguration.config.example" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        Write-Message "Backing up Sitecore.ContentSearch.Solr.DefaultIndexConfiguration.config.example" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
         $solrConfig.Save($backup)
         $backupFiles.Add($backup)
 
-        $solrConfig.configuration.SelectSingleNode("sitecore/settings/setting[@name='ContentSearch.Solr.ServiceBaseAddress']").SetAttribute("value", $config.InstallSettings.WebServer.Solr.ServiceBaseAddress)
-        Write-Message $config "Changing Solr ServiceBaseAddress" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        $solrConfig.configuration.SelectSingleNode("sitecore/settings/setting[@name='ContentSearch.Solr.ServiceBaseAddress']").SetAttribute("value", $script:configSettings.WebServer.Solr.ServiceBaseAddress)
+        Write-Message "Changing Solr ServiceBaseAddress" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
 
-        Write-Message $config "Saving Sitecore.ContentSearch.Solr.DefaultIndexConfiguration.config.example" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        Write-Message "Saving Sitecore.ContentSearch.Solr.DefaultIndexConfiguration.config.example" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
         $solrConfig.Save($solrConfigPath)
     }
     #endregion
 
     #region Configure CM/CD/PublishingServer roles
-    if ((Get-ConfigOption $config "WebServer/CDServerSettings/enabled" $TRUE) -and (Get-ConfigOption $config "WebServer/CDServerSettings/ConfigureFilesForCD"))
+    if ($script:configSettings.WebServer.CDServerSettings.Enabled -and $script:configSettings.WebServer.CDServerSettings.ConfigureFilesForCD)
     {
-        Disable-FilesForCDServer $config
-        Enable-FilesForCDServer $config
+        Disable-FilesForCDServer
+        Enable-FilesForCDServer
     }
 
-    if (Get-ConfigOption $config "WebServer/CMServerSettings/enabled" $TRUE)
+    if ($script:configSettings.WebServer.CMServerSettings.Enabled)
     {
         $scalabilityConfigPath = Join-Path $installPath -ChildPath "Website\App_Config\Include\ScalabilitySettings.config"
         if (Test-Path $scalabilityConfigPath)
@@ -1996,7 +2330,7 @@ function Set-ConfigurationFiles([xml]$config)
             $match = Get-Item ($scalabilityConfigPath + ".*") | Select-Object -First 1
 
             Copy-Item -Path $match -Destination $scalabilityConfigPath
-            Write-Message $config "Enabled: $scalabilityConfigPath" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+            Write-Message "Enabled: $scalabilityConfigPath" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
         }
 
         # Edit ScalabilitySettings.config
@@ -2004,108 +2338,82 @@ function Set-ConfigurationFiles([xml]$config)
         $scalabilityConfig = [xml](Get-Content $scalabilityConfigPath)
         $currentDate = (Get-Date).ToString("yyyyMMdd_hh-mm-s")
         $backup = $scalabilityConfigPath + "__$currentDate"
-        Write-Message $config "Backing up ScalabilitySettings.config" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        Write-Message "Backing up ScalabilitySettings.config" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
         $scalabilityConfig.Save($backup)
         $backupFiles.Add($backup)
-        $instanceName = $config.InstallSettings.WebServer.CMServerSettings.InstanceName
+        $instanceName = $script:configSettings.WebServer.CMServerSettings.InstanceName
         $scalabilityConfig.configuration.SelectSingleNode("sitecore/settings/setting[@name='InstanceName']").ChildNodes[0].InnerText = $instanceName
-        Write-Message $config "Saving changes to ScalabilitySettings.config" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        Write-Message "Saving changes to ScalabilitySettings.config" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
         $scalabilityConfig.Save($scalabilityConfigPath)
 
-        if (Test-PublishingServerRole $config)
+        if (Test-PublishingServerRole)
         {
-            Enable-FilesForPublishingServer $config
+            Enable-FilesForPublishingServer
 
             # Edit ScalabilitySettings.config
-            $publishingInstanceName = $config.InstallSettings.WebServer.CMServerSettings.Publishing.PublishingInstance
+            $publishingInstanceName = $script:configSettings.WebServer.CMServerSettings.Publishing.PublishingInstance
             $scalabilityConfig.configuration.SelectSingleNode("sitecore/settings/setting[@name='Publishing.PublishingInstance']").ChildNodes[0].InnerText = $publishingInstanceName
-            Write-Message $config "Saving changes to ScalabilitySettings.config" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+            Write-Message "Saving changes to ScalabilitySettings.config" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
             $scalabilityConfig.Save($scalabilityConfigPath)
 
-            if (Get-ConfigOption $config "WebServer/CMServerSettings/Publishing/Parallel/enabled" $TRUE)
+            if ($script:configSettings.WebServer.CMServerSettings.Publishing.Parallel.Enabled)
             {
                 # Edit Sitecore.Publishing.Parallel.config
                 $parallelConfigPath = Join-Path $installPath -ChildPath "Website\App_Config\Include\Sitecore.Publishing.Parallel.config"
                 $parallelConfig = [xml](Get-Content $parallelConfigPath)
                 $currentDate = (Get-Date).ToString("yyyyMMdd_hh-mm-s")
                 $backup = $parallelConfigPath + "__$currentDate"
-                Write-Message $config "Backing up Sitecore.Publishing.Parallel.config" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+                Write-Message "Backing up Sitecore.Publishing.Parallel.config" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
                 $parallelConfig.Save($backup)
                 $backupFiles.Add($backup)
-                $maxDegrees = $config.InstallSettings.WebServer.CMServerSettings.Publishing.Parallel.MaxDegreesOfParallelism
+                $maxDegrees = $script:configSettings.WebServer.CMServerSettings.Publishing.Parallel.MaxDegreesOfParallelism
                 $parallelConfig.configuration.SelectSingleNode("sitecore/settings/setting[@name='Publishing.MaxDegreeOfParallelism']").ChildNodes[0].InnerText = $maxDegrees
-                Write-Message $config "Saving changes to Sitecore.Publishing.Parallel.config" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+                Write-Message "Saving changes to Sitecore.Publishing.Parallel.config" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
                 $parallelConfig.Save($parallelConfigPath)
             }
         }
     }
     #endregion
 
-    Write-Message $config "Modifying config files complete!" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+    Write-Message "Modifying config files complete!" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     return $backupFiles
 }
 
-function Set-AclForFolder([string]$userName, [string]$permission, [string]$folderPath)
+function Add-AppPoolIdentityToLocalGroup([string]$groupName, [string]$iisSiteName)
 {
-    $acl = Get-Acl $folderPath
-    $rule = New-Object System.Security.AccessControl.FileSystemAccessRule($userName, $permission, "ContainerInherit,ObjectInherit", "None", "Allow")
-    $acl.SetAccessRule($rule)
-    Set-Acl $folderPath $acl
-    Write-Message $config "Added $userName to ACL ($permission) for $folderPath" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
-}
-
-function Confirm-IsUserMemberOfLocalGroup([string]$groupName, [string]$userName)
-{
-    $group =[ADSI]"WinNT://$env:COMPUTERNAME/$groupName,group" 
-    $members = @($group.psbase.Invoke("Members")) 
-
-    foreach ($member in $members)
-    {
-        $memberName = $member.GetType().InvokeMember("Name", 'GetProperty', $null, $member, $null)
-        if ($memberName -eq $userName)
-        {
-            return $TRUE
-        }
-    }
-
-    return $FALSE
-}
-
-function Add-AppPoolIdentityToLocalGroup([xml]$config, [string]$groupName, [string]$iisSiteName)
-{
-    if ($config.InstallSettings.WebServer.AppPoolIdentity -eq "ApplicationPoolIdentity")
+    if ($script:configSettings.WebServer.AppPoolIdentity -eq "ApplicationPoolIdentity")
     {
         $domain = "IIS APPPOOL"
         $site = Get-Item "IIS:\sites\$iisSiteName"
         $userName = $site.applicationPool
     }
-    elseif ($config.InstallSettings.WebServer.AppPoolIdentity -eq "NetworkService")
+    elseif ($script:configSettings.WebServer.AppPoolIdentity -eq "NetworkService")
     {
         $domain = "NT AUTHORITY"
         $userName = "Network Service"
     }
     else
     {
-        $split = $config.InstallSettings.WebServer.AppPoolIdentity.split("\")
+        $split = $script:configSettings.WebServer.AppPoolIdentity.split("\")
         $domain = $split[0]
         $userName = $split[1]
     }
 
-    if (Confirm-IsUserMemberOfLocalGroup $groupName $userName)
+    if (Test-IsUserMemberOfLocalGroup $groupName $userName)
     {
-        Write-Message $config "$userName is already a member of $groupName" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        Write-Message "$userName is already a member of $groupName" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     }
     else
     {
         $group = [ADSI]"WinNT://$env:COMPUTERNAME/$groupName,group"
         $group.Add("WinNT://$domain/$userName,user")
-        Write-Message $config "$userName added a member of $groupName" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        Write-Message "$userName added a member of $groupName" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     }
 }
 
-function Set-FileSystemPermissions([xml]$config, [string]$iisSiteName)
+function Set-FileSystemPermissions([string]$iisSiteName)
 {
-    $installPath = Join-path $config.InstallSettings.WebServer.SitecoreInstallRoot -ChildPath $config.InstallSettings.WebServer.SitecoreInstallFolder
+    $installPath = $script:configSettings.WebServer.SitecoreInstallPath
 
     # Get app pool from site name
     $site = Get-Item "IIS:\sites\$iisSiteName" 
@@ -2128,58 +2436,58 @@ function Set-FileSystemPermissions([xml]$config, [string]$iisSiteName)
     Set-AclForFolder $identityName "Modify" $folderPath
 }
 
-function Block-AnonymousUsers([xml]$config, [string]$iisSiteName)
+function Block-AnonymousUsers([string]$iisSiteName)
 {
-    Write-Message $config "Blocking anonymous access to sensitive folders on CD server." "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+    Write-Message "Blocking anonymous access to sensitive folders on CD server." "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     $filter = "/system.WebServer/security/authentication/anonymousAuthentication"
     $folderList = @("/App_Config", "/sitecore/admin", "/sitecore/debug", "/sitecore/shell/WebService")
     foreach ($folder in $folderList)
     {
         Set-WebConfigurationProperty -Filter $filter -PSPath IIS:\ -Name enabled -Location "$iisSiteName$folder" -Value false
-        Write-Message $config "Blocked folder: $folder" "White" -WriteToLogOnly $TRUE -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        Write-Message "Blocked folder: $folder" "White" -WriteToLogOnly $TRUE -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     }
 }
 
-function Revoke-ExecutePermission([xml]$config, [string]$iisSiteName, [string]$folderPath)
+function Revoke-ExecutePermission([string]$iisSiteName, [string]$folderPath)
 {
-    Write-Message $config "Denying execute permission on the $folderPath folder." "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+    Write-Message "Denying execute permission on the $folderPath folder." "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     Set-WebConfigurationProperty /system.WebServer/handlers "IIS:\sites\$iisSiteName\$folderPath" -Name accessPolicy -value "Read"
 }
 
-function Set-SecuritySettings([xml]$config, [string]$iisSiteName)
+function Set-SecuritySettings([string]$iisSiteName)
 {
-    Write-Message $config "`nApplying recommended security settings..." "Green" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+    Write-Message "`nApplying recommended security settings..." "Green" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
 
-    Set-FileSystemPermissions $config $iisSiteName
+    Set-FileSystemPermissions $iisSiteName
 
-    Add-AppPoolIdentityToLocalGroup $config "IIS_IUSRS" $iisSiteName
-    Add-AppPoolIdentityToLocalGroup $config "Performance Monitor Users" $iisSiteName
+    Add-AppPoolIdentityToLocalGroup "IIS_IUSRS" $iisSiteName
+    Add-AppPoolIdentityToLocalGroup "Performance Monitor Users" $iisSiteName
 
-    if (Get-ConfigOption $config "WebServer/CDServerSettings/enabled" $TRUE)
+    if ($script:configSettings.WebServer.CDServerSettings.Enabled)
     {
-        if (Get-ConfigOption $config "WebServer/CDServerSettings/ApplyIPWhitelist")
+        if ($script:configSettings.WebServer.CDServerSettings.ApplyIPWhitelist)
         {
-            Set-IpRestrictions $config $iisSiteName
+            Set-IpRestrictions $iisSiteName
         }
 
-        if (Get-ConfigOption $config "WebServer/CDServerSettings/PreventAnonymousAccess")
+        if ($script:configSettings.WebServer.CDServerSettings.PreventAnonymousAccess)
         {
-            Block-AnonymousUsers $config $iisSiteName
+            Block-AnonymousUsers $iisSiteName
         }
 
-        if (Get-ConfigOption $config "WebServer/CDServerSettings/DenyExecutePermission")
+        if ($script:configSettings.WebServer.CDServerSettings.DenyExecutePermission)
         {
-            Revoke-ExecutePermission $config $iisSiteName "temp"
-            Revoke-ExecutePermission $config $iisSiteName "upload"
+            Revoke-ExecutePermission $iisSiteName "temp"
+            Revoke-ExecutePermission $iisSiteName "upload"
         }
     }
     
-    Write-Message $config "Security settings complete!" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+    Write-Message "Security settings complete!" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
 }
 
-function Get-SiteUrl([xml]$config)
+function Get-SiteUrl
 {
-    $binding = $config.InstallSettings.WebServer.IISBindings.Binding | Select-Object -First 1
+    $binding = $script:configSettings.WebServer.IISBindings | Select-Object -First 1
 
     $hostname = $binding.HostHeader
     if ($hostname.Length -eq 0)
@@ -2204,11 +2512,42 @@ function Get-SiteUrl([xml]$config)
 
 function Start-Browser([string]$siteUrl)
 {
-    $siteUrl = Get-SiteUrl $config
-    Write-Message $null "`nLaunching site in browser: $siteUrl" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+    $siteUrl = Get-SiteUrl
+    Write-Message "`nLaunching site in browser: $siteUrl" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
     $ie = new-object -comobject "InternetExplorer.Application" 
     $ie.visible = $true
     $ie.navigate($siteUrl)
+}
+#endregion
+
+function Initialize-SitecoreInstaller([string]$configPath)
+{
+    if (!(Test-PreRequisites))
+    {
+        throw "Please satisfy pre-requisites and try again."
+    }
+    
+    [xml]$configXml = Read-InstallConfigFile $configPath
+    if ($configXml -eq $null)
+    {
+        throw ""
+    }
+
+    New-ConfigSettings $configXml
+
+    $configIsValid = Test-ConfigurationSettings
+    if (!$configIsValid)
+    {
+        throw "A bad configuration setting was found."
+    }
+    
+    Add-CalculatedPropertiesToConfigurationSettings
+
+    # Create install directory
+    if (!(Test-Path $script:configSettings.WebServer.SitecoreInstallPath))
+    {
+        New-Item $installPath -type directory -force | Out-Null
+    }
 }
 
 function Install-SitecoreApplication([string]$configPath, [bool]$SuppressOutputToScreen=$FALSE)
@@ -2216,73 +2555,64 @@ function Install-SitecoreApplication([string]$configPath, [bool]$SuppressOutputT
     $hostScreenAvailable = !$SuppressOutputToScreen
     $deleteBackupFiles = $TRUE
 
-    if (!(Test-PreRequisites))
+    try
     {
-        Write-Message $null "Aborting Install: Please satisfy pre-requisites and try again." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
-        return
+        Initialize-SitecoreInstaller
     }
-    
-    [xml]$config = Read-InstallConfigFile $configPath
-    if ($config -eq $null)
+    catch [Exception]
     {
-        Write-Message $null "Aborting install." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+        if (!([string]::IsNullOrEmpty($_.Exception.Message)))
+        {
+            Write-Message ($_.Exception.Message) "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+        }
+        if (!([string]::IsNullOrEmpty($_.Exception.ErrorRecord.ScriptStackTrace)))
+        {
+            Write-Message ($_.Exception.ErrorRecord.ScriptStackTrace) "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+        }
+        Write-Message "Aborting install: No action taken." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
         return
-    }
-
-    $configIsValid = Confirm-ConfigurationSettings $config
-    if (!$configIsValid)
-    {
-        Write-Message $null "Aborting install: config.xml file has a bad setting." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
-        return
-    }
-
-    # Create install directory
-    $installPath = Join-Path $config.InstallSettings.WebServer.SitecoreInstallRoot -ChildPath $config.InstallSettings.WebServer.SitecoreInstallFolder
-    if (!(Test-Path $installPath))
-    {
-        New-Item $installPath -type directory -force | Out-Null
     }
 
     $stopWatch = [Diagnostics.Stopwatch]::StartNew()
     $date = Get-Date    
-    $message = "Starting Sitecore install [Kernel version $(Get-SitecoreVersion $config $TRUE $TRUE)] - $date" 
-    Write-Message $config $message "Green" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+    $message = "Starting Sitecore install [Sitecore.Kernel.dll version $(Get-SitecoreVersion $TRUE $TRUE)] - $date" 
+    Write-Message $message "Green" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
 
-    if (Get-ConfigOption $config "WebServer/CMServerSettings/enabled" $TRUE)
+    if ($script:configSettings.WebServer.CMServerSettings.Enabled)
     {
         $role = "CM"
-        if (Get-ConfigOption $config "WebServer/CMServerSettings/Publishing/enabled" $TRUE)
+        if ($script:configSettings.WebServer.CMServerSettings.Publishing.Enabled)
         {
             $role = "Publishing Server"
         }
     }
-    elseif (Get-ConfigOption $config "WebServer/CDServerSettings/enabled" $TRUE)
+    elseif ($script:configSettings.WebServer.CDServerSettings.Enabled)
     {
         $role = "CD"
     }
-    Write-Message $config "Configuring server for [$role] role." "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+    Write-Message "Configuring server for [$role] role." "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
 
     try
     {
-        $loginName = $config.InstallSettings.Database.SqlLoginForInstall
-        Write-Message $config "Using $loginName as the SQL login during installation" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
-        $loginName = Get-SqlLoginAccountForDataAccess $config
-        Write-Message $config "Using $loginName as the SQL login for data access" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        $loginName = $script:configSettings.Database.SqlLoginForInstall
+        Write-Message "Using $loginName as the SQL login during installation" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        $loginName = Get-SqlLoginAccountForDataAccess
+        Write-Message "Using $loginName as the SQL login for data access" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
 
-        Copy-SitecoreFiles $config
+        Copy-SitecoreFiles
 
-        [System.Collections.Generic.List[string]]$backupFiles = Set-ConfigurationFiles $config
+        [System.Collections.Generic.List[string]]$backupFiles = Set-ConfigurationFiles
 
-        $iisSiteName = Initialize-WebSite $config
+        $iisSiteName = Initialize-WebSite
 
-        Set-SecuritySettings $config $iisSiteName
+        Set-SecuritySettings $iisSiteName
 
-        Initialize-SitecoreDatabases $config
+        Initialize-SitecoreDatabases
     }
     catch [Exception]
     {
-        Write-Message $config  ($_.Exception.Message) "Red" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
-        Write-Message $config "Aborting install." "Red" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        Write-Message  ($_.Exception.Message) "Red" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        Write-Message "Aborting install." "Red" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
         $deleteBackupFiles = $FALSE
     }
     finally
@@ -2294,9 +2624,9 @@ function Install-SitecoreApplication([string]$configPath, [bool]$SuppressOutputT
 
         $stopWatch.Stop()
         $message = "`nSitecore install finished - Elapsed time {0}:{1:D2} minute(s)" -f $stopWatch.Elapsed.Minutes, $stopWatch.Elapsed.Seconds
-        Write-Message $config $message "Green" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        Write-Message $message "Green" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
 
-        Start-Browser $config
+        Start-Browser
     }
 }
 
