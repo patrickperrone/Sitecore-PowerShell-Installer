@@ -5,18 +5,22 @@ The Sitecore-PowerShell-Installer script enables you to install Production-ready
 ### Features of the Project
 - Install Sitecore with or without the databases.
 - Supports installing a CD, CM, or Publishing server
-- Script sanity checks SQL and input validation prior to making any changes
+- Script sanity checks SQL connection, input validation, and module dependencies prior to making any changes
 - Write output to the screen and to a log file.
 - Fine-grained control of the application pool identity (built-in or domain account)
 - Assign recommended file system permissions on web server.
 - Add application pool identity to recommended local groups on web server.
 - Create user mappings for login in SQL and grant execute permission.
-- Install database files on any valid path or UNC
+- Install database files on any valid filesystem path or UNC share
 - SQL Login used during install doesn't have to be the same account executing the script.
 - Full supports MongoDB's connection string specification
 - May supply a Solr base address
 - Choose to use SQL as a session state server
 - Many CD-hardening options
+
+### Software Dependencies
+- Web Server (IIS) Administration: https://technet.microsoft.com/en-us/library/ee790599.aspx
+- SQL Server PowerShell: https://msdn.microsoft.com/en-us/library/hh245198.aspx
 
 ### Requirements
 - SQL logins must exist prior to running script
