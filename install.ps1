@@ -282,7 +282,7 @@ function Add-CalculatedPropertiesToConfigurationSettings
 {
     # WebServer.SitecoreInstallPath
     $sitecoreInstallPath = Join-Path $script:configSettings.WebServer.SitecoreInstallRoot -ChildPath $script:configSettings.WebServer.SitecoreInstallFolder
-    $script:configSettings.WebServer | Add-Member –MemberType NoteProperty –Name SitecoreInstallPath –Value $sitecoreInstallPath
+    $script:configSettings.WebServer | Add-Member –MemberType NoteProperty -Name SitecoreInstallPath –Value $sitecoreInstallPath
 
     # WebServer.SitecoreLogPath
     $sitecoreLogPath = ""
@@ -358,8 +358,14 @@ function New-ConfigSettings([xml]$config)
     {
         $instanceName = $instanceName.Trim()
     }
+    $adminPassword = $config.InstallSettings.WebServer.CMServerSettings.DefaultSitecoreAdminPassword
+    if (!([string]::IsNullOrEmpty($adminPassword)))
+    {
+        $adminPassword = $adminPassword.Trim()
+    }
     $cmServerSettings | Add-Member –MemberType NoteProperty –Name Enabled –Value (Get-ConfigOption $config "WebServer/CMServerSettings/enabled" $TRUE)
     $cmServerSettings | Add-Member –MemberType NoteProperty –Name InstanceName –Value $instanceName
+    $cmServerSettings | Add-Member –MemberType NoteProperty –Name DefaultSitecoreAdminPassword –Value $adminPassword
     $cmServerSettings | Add-Member –MemberType NoteProperty –Name Publishing –Value $publishing
     #endregion
 
@@ -527,30 +533,56 @@ function New-ConfigSettings([xml]$config)
     #region Database
 
     #region DatabaseNames
-    $databaseNames = New-Object 'System.Collections.Generic.List[string]'
+    $databases = New-Object 'System.Collections.Generic.List[PSObject]'
     foreach ($dbname in ($config.InstallSettings.Database.DatabaseNames.name))
     {
+        $db = New-Object -TypeName PSObject
+
         $name = $dbname
         if (!([string]::IsNullOrEmpty($name)))
         {
             $name = $name.Trim()
         }
 
-        $databaseNames.Add($name)
+        $db | Add-Member –MemberType NoteProperty –Name Name –Value $name
+        $db | Add-Member –MemberType NoteProperty –Name ConnectionStringName –Value $name.ToLower()
+        $databases.Add($db)
     }
     #endregion
 
     #region WebDatabaseCopies
-    $webDatabaseCopies = New-Object 'System.Collections.Generic.List[string]'
+    $webDatabaseCopies = New-Object 'System.Collections.Generic.List[PSObject]'
     foreach ($copy in ($config.InstallSettings.Database.WebDatabaseCopies.copy))
     {
-        $copyname = $copy
+        $db = New-Object -TypeName PSObject
+
+        if ($copy.GetType().Name -eq "String")
+        {
+            $copyname = $copy
+        }
+        else
+        {
+            $copyname = $copy.InnerText
+        }
+
         if (!([string]::IsNullOrEmpty($copyname)))
         {
             $copyname = $copyname.Trim()
         }
 
-        $webDatabaseCopies.Add($copyname)
+        $connectionStringName = $copy.connectionStringName
+        if ([string]::IsNullOrEmpty($connectionStringName))
+        {
+            $connectionStringName = $copyname.ToLower()
+        }
+        else
+        {
+            $connectionStringName = $connectionStringName.Trim()
+        }
+
+        $db | Add-Member –MemberType NoteProperty –Name Name –Value $copyname
+        $db | Add-Member –MemberType NoteProperty –Name ConnectionStringName –Value $connectionStringName
+        $webDatabaseCopies.Add($db)
     }
     #endregion
 
@@ -604,9 +636,10 @@ function New-ConfigSettings([xml]$config)
     {
         $databaseNamePrefix = $databaseNamePrefix.Trim()
     }
-
+    
+    $database | Add-Member –MemberType NoteProperty –Name Enabled –Value (Get-ConfigOption $config "Database/enabled" $TRUE)
     $database | Add-Member –MemberType NoteProperty –Name InstallDatabase –Value (Get-ConfigOption $config "Database/InstallDatabase")
-    $database | Add-Member -MemberType NoteProperty -Name DatabaseNames -Value $databaseNames
+    $database | Add-Member -MemberType NoteProperty -Name Databases -Value $databases
     $database | Add-Member -MemberType NoteProperty -Name WebDatabaseCopies -Value $webDatabaseCopies
     $database | Add-Member -MemberType NoteProperty -Name SqlServerName -Value $sqlServerName
     $database | Add-Member -MemberType NoteProperty -Name SqlLoginForInstall -Value $sqlLoginForInstall
@@ -805,13 +838,19 @@ function Test-WebDatabseCopyNames
 {
     $dbCopies = $script:configSettings.Database.WebDatabaseCopies
 
-    if ($dbCopies.copy.Count -ne ($dbCopies.copy | select -Unique).Count)
+    if ($dbCopies.Count -ne ($dbCopies | Select Name -Unique | measure).Count)
     {
-        Write-Message "The name of a web database copy was used more than once in the config file." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+        Write-Message "The name of a web database copy was repeated in the config file." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
         return $FALSE
     }
 
-    if ($dbCopies.copy -contains "web")
+    if ($dbCopies.Count -ne ($dbCopies | Select ConnectionStringName -Unique | measure).Count)
+    {
+        Write-Message "The value of the connectionStringName attribute for a web database copy was repeated in the config file." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+        return $FALSE
+    }
+
+    if ($dbCopies | Where-Object {$_.Name.ToLower() -eq "web"})
     {
         Write-Message "Cannot use 'web' (name is case-insensitive) as the name of a web database copy." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
         return $FALSE
@@ -969,6 +1008,16 @@ function Test-SessionStateConfiguration
     return $TRUE
 }
 
+function Test-ShouldSetAutogrowth
+{
+    if ($script:configSettings.WebServer.CMServerSettings.Publishing.Enabled -and $script:configSettings.WebServer.CMServerSettings.Publishing.Parallel.Enabled)
+    {
+        return $TRUE
+    }
+
+    return $FALSE
+}
+
 function Test-ConfigurationSettings
 {
     if ([string]::IsNullOrEmpty($script:configSettings.SitecoreZipPath))
@@ -1117,29 +1166,59 @@ function Test-ConfigurationSettings
         return $FALSE
     }
 
-    if ([string]::IsNullOrEmpty($script:configSettings.Database.SqlLoginForInstall))
+    if ($script:configSettings.Database.Enabled)
     {
-        Write-Message "SqlLoginForInstall cannot be null or empty" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
-        return $FALSE
-    }
-    else
-    {
-        $split = $script:configSettings.Database.SqlLoginForInstall.Split("\")
-        if ($split.Count -eq 2)
+        if ([string]::IsNullOrEmpty($script:configSettings.Database.SqlLoginForInstall))
         {
-            # Validate that input is in the form <domain>\<username>
-            if ([string]::IsNullOrEmpty($split[0]) -or [string]::IsNullOrEmpty($split[1]))
+            Write-Message "SqlLoginForInstall cannot be null or empty" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+            return $FALSE
+        }
+        else
+        {
+            $split = $script:configSettings.Database.SqlLoginForInstall.Split("\")
+            if ($split.Count -eq 2)
             {
-                Write-Message "SqlLoginForInstall must be of the form <domain>\<username>" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+                # Validate that input is in the form <domain>\<username>
+                if ([string]::IsNullOrEmpty($split[0]) -or [string]::IsNullOrEmpty($split[1]))
+                {
+                    Write-Message "SqlLoginForInstall must be of the form <domain>\<username>" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+                    return $FALSE
+                }
+            }
+        }
+
+        if ([string]::IsNullOrEmpty($script:configSettings.Database.SqlLoginForInstallPassword))
+        {
+            Write-Message "SqlLoginForInstallPassword cannot be null or empty" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+            return $FALSE
+        }
+
+        if ($script:configSettings.Database.InstallDatabase)
+        {
+            if ([string]::IsNullOrEmpty($script:configSettings.Database.DatabaseInstallPath.Local))
+            {
+                Write-Message "DatabaseInstallPath.Local cannot be null or empty" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+                return $FALSE
+            }
+    
+            if (!(Test-SqlInstallPath))
+            {
+                Write-Message "DatabaseInstallPath is not valid." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
                 return $FALSE
             }
         }
-    }
 
-    if ([string]::IsNullOrEmpty($script:configSettings.Database.SqlLoginForInstallPassword))
-    {
-        Write-Message "SqlLoginForInstallPassword cannot be null or empty" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
-        return $FALSE
+        if (!(Test-SqlLoginConfiguration))
+        {
+            Write-Message "The specified combination of accounts will not produce a valid SQL login for data access." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+            return $FALSE
+        }
+
+        if(!(Test-SqlConnectionAndRoles))
+        {
+            Write-Message "A problem has been detected with the SQL connection." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+            return $FALSE
+        }
     }
 
     if (!([string]::IsNullOrEmpty($script:configSettings.Database.SqlLoginForDataAccess)))
@@ -1157,33 +1236,6 @@ function Test-ConfigurationSettings
             Write-Message "SqlLoginForDataAccess cannot be a domain account" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
             return $FALSE
         }
-    }
-
-    if ($script:configSettings.Database.InstallDatabase)
-    {
-        if ([string]::IsNullOrEmpty($script:configSettings.Database.DatabaseInstallPath.Local))
-        {
-            Write-Message "DatabaseInstallPath.Local cannot be null or empty" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
-            return $FALSE
-        }
-    
-        if (!(Test-SqlInstallPath))
-        {
-            Write-Message "DatabaseInstallPath is not valid." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
-            return $FALSE
-        }
-    }
-
-    if (!(Test-SqlLoginConfiguration))
-    {
-        Write-Message "The specified combination of accounts will not produce a valid SQL login for data access." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
-        return $FALSE
-    }
-
-    if(!(Test-SqlConnectionAndRoles))
-    {
-        Write-Message "A problem has been detected with the SQL connection." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
-        return $FALSE
     }
 
     if (!(Test-WebDatabseCopyNames))
@@ -1314,7 +1366,7 @@ function Copy-DatabaseFiles([string]$zipPath)
                 # Make copies of the web Database as required
                 foreach ($copy in $script:configSettings.Database.WebDatabaseCopies)
                 {
-                    $copyFilePath = Join-Path $dbFolderPath -ChildPath (Get-SubstituteDatabaseFileName $childItem.Name $copy)
+                    $copyFilePath = Join-Path $dbFolderPath -ChildPath (Get-SubstituteDatabaseFileName $childItem.Name $copy.Name)
                     Copy-Item $filePath $copyFilePath
                 }
             }
@@ -1369,13 +1421,20 @@ function Copy-SitecoreFiles
         Write-Message "$folderName folder copied." "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     }
 
-    if ($script:configSettings.Database.InstallDatabase)
+    if ($script:configSettings.Database.Enabled -and $script:configSettings.Database.InstallDatabase)
     {
         Copy-DatabaseFiles $zipPath
     }
     else
     {
-        Write-Message "Skipping database file extraction: InstallDatabase option is false" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        if (!$script:configSettings.Database.Enabled)
+        {
+            Write-Message "Skipping database file extraction: Database configuration is disabled" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        }
+        else
+        {
+            Write-Message "Skipping database file extraction: InstallDatabase option is false" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        }
     }
     
     $licenseInstallPath = Join-Path $installPath -ChildPath "Data\license.xml"
@@ -1436,16 +1495,20 @@ function Set-DatabaseRoles([string]$databaseName, [Microsoft.SqlServer.Managemen
 {
     $loginName = Get-SqlLoginAccountForDataAccess
 
-    # Add database mapping
-    $database = $sqlServerSmo.Databases[$databaseName]
-    if ($database.Users[$loginName])
+    if ($loginName -eq "sa")
     {
-        Write-Message "Dropping user from $database" "Yellow" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
-        $database.Users[$loginName].Drop()
+        Write-Message "The login `"$loginName`" is the built-in sysadmin for SQL. Skip setting roles for this user." "Yellow" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        return
     }
-    $dbUser = New-Object -TypeName Microsoft.SqlServer.Management.Smo.User -ArgumentList $database, $loginName
-    $dbUser.Login = $loginName
-    $dbUser.Create()
+
+    $database = $sqlServerSmo.Databases[$databaseName]
+    $dbUser = $database.Users | Where-Object {$_.Login -eq "$loginName"}
+    if ($dbUser -eq $null)
+    {
+        $dbUser = New-Object -TypeName Microsoft.SqlServer.Management.Smo.User -ArgumentList $database, $loginName
+        $dbUser.Login = $loginName
+        $dbUser.Create()
+    }
 
     $basicRoles = @("db_datareader", "db_datawriter", "public")
     $extendedRoles = @("aspnet_Membership_BasicAccess", "aspnet_Membership_FullAccess", "aspnet_Membership_ReportingAccess",
@@ -1461,9 +1524,9 @@ function Set-DatabaseRoles([string]$databaseName, [Microsoft.SqlServer.Managemen
     # Assign database roles user
     foreach ($roleName in $roles)
     {
-        Write-Message "Adding $roleName role for $loginName on $database" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        Write-Message "Adding $roleName role for $($dbUser.Name) on $database" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
         $dbrole = $database.Roles[$roleName]
-        $dbrole.AddMember($loginName)
+        $dbrole.AddMember($dbUser.Name)
         $dbrole.Alter | Out-Null
     }
 }
@@ -1471,6 +1534,20 @@ function Set-DatabaseRoles([string]$databaseName, [Microsoft.SqlServer.Managemen
 function Grant-DatabasePermissions([string]$databaseName, [Microsoft.SqlServer.Management.Smo.Server]$sqlServerSmo)
 {
     $loginName = Get-SqlLoginAccountForDataAccess
+    $database = $sqlServerSmo.Databases[$databaseName]
+    $dbUser = $database.Users | Where-Object {$_.Login -eq "$loginName"}
+
+    if ($loginName -eq "sa")
+    {
+        Write-Message "The login `"$loginName`" is the built-in sysadmin for SQL. Skip setting permissions for this user." "Yellow" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        return
+    }
+
+    if ($dbUser -eq $null)
+    {
+        Write-Message "Could not find a user for the login `"$loginName`". Cannot grant permissions." "Yellow" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        return
+    }
 
     $database = $sqlServerSmo.Databases[$databaseName]
     $permset = New-Object Microsoft.SqlServer.Management.Smo.DatabasePermissionSet 
@@ -1506,17 +1583,29 @@ function Set-DatabaseGrowth([string]$databaseName, [Microsoft.SqlServer.Manageme
 
 function Initialize-SitecoreDatabases
 {
+    if (!$script:configSettings.Database.Enabled)
+    {
+        Write-Message "Skipping database initialization. Database configuration is disabled." "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        return
+    }
+
     Write-Message "`nInitializing Sitecore Databases..." "Green" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
 
     [Microsoft.SqlServer.Management.Smo.Server]$sqlServerSmo = Get-SqlServerSmo
 
-    $databaseNames = $script:configSettings.Database.DatabaseNames
     $webDatabaseNames = New-Object 'System.Collections.Generic.List[string]'
+    $databaseNames = New-Object 'System.Collections.Generic.List[string]'
+
+    foreach ($db in $script:configSettings.Database.Databases)
+    {
+        $databaseNames.Add($db.Name)
+    }
+
     $webDatabaseNames.Add("Web")
     foreach ($copy in $script:configSettings.Database.WebDatabaseCopies)
     {
-        $databaseNames.Add($copy)
-        $webDatabaseNames.Add($copy)
+        $databaseNames.Add($copy.Name)
+        $webDatabaseNames.Add($copy.Name)
     }
 
     foreach ($dbname in $databaseNames)
@@ -1525,10 +1614,13 @@ function Initialize-SitecoreDatabases
         Set-DatabaseRoles $fullDatabaseName $sqlServerSmo
         Grant-DatabasePermissions $fullDatabaseName $sqlServerSmo
     }
-
-    foreach ($webDbName in $webDatabaseNames)
+    
+    if (Test-ShouldSetAutogrowth)
     {
-        Set-DatabaseGrowth $webDbName $sqlServerSmo
+        foreach ($webDbName in $webDatabaseNames)
+        {
+            Set-DatabaseGrowth $webDbName $sqlServerSmo
+        }
     }
 
     Write-Message "Database initialization complete!" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
@@ -2113,34 +2205,47 @@ function Set-ConfigurationFiles
     $backupFiles.Add($backup)
 
     $baseConnectionString = $script:configSettings.Database.BaseConnectionString
-    foreach ($databaseName in $script:configSettings.Database.DatabaseNames)
+    foreach ($db in $script:configSettings.Database.Databases)
     {
-        $dbname = $databaseName.ToLower()
-        $fullDatabaseName = $script:configSettings.Database.DatabaseNamePrefix + $databaseName
+        $fullDatabaseName = $script:configSettings.Database.DatabaseNamePrefix + $db.Name
         $connectionString = $baseConnectionString + $fullDatabaseName + ";"
 
-        $node = $connectionStringsConfig.SelectSingleNode("connectionStrings/add[@name='$dbname']")
+        $node = $connectionStringsConfig.SelectSingleNode("connectionStrings/add[@name='$($db.ConnectionStringName)']")
         if ($node -ne $null)
         {
-            $node.SetAttribute("connectionString", $connectionString);
+            $node.SetAttribute("connectionString", $connectionString)
         }
     }
 
     # Add additional connection strings for each web database copy
     foreach ($copy in $script:configSettings.Database.WebDatabaseCopies)
     {
-        $dbElement = $connectionStringsConfig.CreateElement("add")
+        $node = $connectionStringsConfig.SelectSingleNode("connectionStrings/add[@name='$($copy.ConnectionStringName)']")
+        if ($node -ne $null)
+        {
+            # Rewrite existing connection string
+            $fullDatabaseName = $script:configSettings.Database.DatabaseNamePrefix + $copy.Name
+            $connectionString = $baseConnectionString + $fullDatabaseName + ";"
+            $node.SetAttribute("connectionString", $connectionString)
+            Write-Message "Modified $($copy.ConnectionStringName) connection string to use $fullDatabaseName database." "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        }
+        else
+        {
+            # Create new connection string
+            $dbElement = $connectionStringsConfig.CreateElement("add")
 
-        $dbAttr = $connectionStringsConfig.CreateAttribute("name")
-        $dbAttr.Value = $copy
-        $dbElement.Attributes.Append($dbAttr) | Out-Null
+            $dbAttr = $connectionStringsConfig.CreateAttribute("name")
+            $dbAttr.Value = $copy.ConnectionStringName
+            $dbElement.Attributes.Append($dbAttr) | Out-Null
         
-        $dbAttr = $connectionStringsConfig.CreateAttribute("connectionString")
-        $dbAttr.Value = $baseConnectionString + $script:configSettings.Database.DatabaseNamePrefix + $copy + ";"
-        $dbElement.Attributes.Append($dbAttr) | Out-Null
+            $dbAttr = $connectionStringsConfig.CreateAttribute("connectionString")
+            $dbAttr.Value = $baseConnectionString + $script:configSettings.Database.DatabaseNamePrefix + $copy.Name + ";"
+            $dbElement.Attributes.Append($dbAttr) | Out-Null
 
-        $connectionStringsConfig.DocumentElement.AppendChild($dbElement) | Out-Null
-        Write-Message "Addedd a $($copy) connection string" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+            $connectionStringsConfig.DocumentElement.AppendChild($dbElement) | Out-Null
+
+            Write-Message "Added a $($copy.ConnectionStringName) connection string." "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        }
     }
 
     # Optionally add a session connection string
@@ -2343,18 +2448,20 @@ function Set-ConfigurationFiles
         $backupFiles.Add($backup)
         $instanceName = $script:configSettings.WebServer.CMServerSettings.InstanceName
         $scalabilityConfig.configuration.SelectSingleNode("sitecore/settings/setting[@name='InstanceName']").ChildNodes[0].InnerText = $instanceName
+
+        $publishingInstanceName = $script:configSettings.WebServer.CMServerSettings.Publishing.PublishingInstance
+        if (!([string]::IsNullOrEmpty($publishingInstanceName)))
+        {
+            # This value MUST be set on all CM servers if it has been provided
+            $scalabilityConfig.configuration.SelectSingleNode("sitecore/settings/setting[@name='Publishing.PublishingInstance']").ChildNodes[0].InnerText = $publishingInstanceName
+        }
+
         Write-Message "Saving changes to ScalabilitySettings.config" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
         $scalabilityConfig.Save($scalabilityConfigPath)
 
         if (Test-PublishingServerRole)
         {
             Enable-FilesForPublishingServer
-
-            # Edit ScalabilitySettings.config
-            $publishingInstanceName = $script:configSettings.WebServer.CMServerSettings.Publishing.PublishingInstance
-            $scalabilityConfig.configuration.SelectSingleNode("sitecore/settings/setting[@name='Publishing.PublishingInstance']").ChildNodes[0].InnerText = $publishingInstanceName
-            Write-Message "Saving changes to ScalabilitySettings.config" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
-            $scalabilityConfig.Save($scalabilityConfigPath)
 
             if ($script:configSettings.WebServer.CMServerSettings.Publishing.Parallel.Enabled)
             {
@@ -2510,13 +2617,99 @@ function Get-SiteUrl
     return $url
 }
 
-function Start-Browser([string]$siteUrl)
+function Start-Browser([string]$url)
 {
-    $siteUrl = Get-SiteUrl
-    Write-Message "`nLaunching site in browser: $siteUrl" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+    if ([string]::IsNullOrEmpty($url))
+    {
+        $url = Get-SiteUrl
+    }
+    Write-Message "`nLaunching site in browser: $url" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
     $ie = new-object -comobject "InternetExplorer.Application" 
     $ie.visible = $true
-    $ie.navigate($siteUrl)
+    $ie.navigate($url)
+}
+
+function Set-DefaultAdminPassword()
+{
+    $password = $script:configSettings.WebServer.CMServerSettings.DefaultSitecoreAdminPassword
+
+    if (!$script:configSettings.WebServer.CMServerSettings.Enabled)
+    {
+        return
+    }
+    
+    if (!$password)
+    {
+        return
+    }
+    
+    Write-Message "Attempting to change default Sitecore admin's password..." "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+    
+    # Thanks to Grant Killian for the basis of this idea: https://grantkillian.wordpress.com/2016/02/04/programmatically-setting-the-sitecore-admin-password-and-how-to-secure-it/
+    $html = "<%@ Language=`"C#`" %>`r`n"
+    $html += "<script runat=server>`r`n"
+    $html += "  public void Page_Load(object sender, EventArgs e)`r`n"
+    $html += "  {`r`n"
+    $html += "    string newPwd = `"$password`";`r`n"
+    $html += "    if (string.IsNullOrWhiteSpace(newPwd))`r`n"
+    $html += "    {`r`n"
+    $html += "      lblSummary.Text = `"No action was taken. A new password was not supplied.`";`r`n"
+    $html += "      hfPasswordChanged.Value = `"false`";`r`n"
+    $html += "    }`r`n"
+    $html += "    else`r`n"
+    $html += "    {`r`n"
+    $html += "      System.Web.Security.MembershipUser user = GetDefaultSitecoreAdmin(); `r`n"
+    $html += "      Sitecore.Diagnostics.Assert.IsNotNull((object) user, typeof (Sitecore.Security.Accounts.User)); `r`n"
+    $html += "      user.ChangePassword(`"b`", newPwd);`r`n"
+    $html += "      lblSummary.Text = `"New password set to `" + newPwd + `" for UserName `" + user.UserName;  `r`n"
+    $html += "      hfPasswordChanged.Value = `"true`";`r`n"
+    $html += "    }`r`n"
+    $html += "  }`r`n"
+    $html += "  System.Web.Security.MembershipUser GetDefaultSitecoreAdmin()`r`n"
+    $html += "  {`r`n"
+    $html += "    return System.Web.Security.Membership.GetUser(@`"sitecore\admin`");`r`n"
+    $html += "  }`r`n"
+    $html += "</script>`r`n"
+    $html += "<html>`r`n"
+    $html += "  <head></head>`r`n"
+    $html += "  <body>`r`n"
+    $html += "    <form id=`"MyForm`" runat=`"server`">`r`n"
+    $html += "      <asp:HiddenField id=`"hfPasswordChanged`" runat=`"server`" value=`"false`" />`r`n"
+    $html += "      <asp:Label runat=`"server`" ID=`"lblSummary`"></asp:Label>`r`n"
+    $html += "    </form>`r`n"
+    $html += "  </body>`r`n"
+    $html += "</html>"
+    
+    $pagePath = "\sitecore\admin\SetDefaultAdminPassword.aspx"
+    $filePath = Join-Path $script:configSettings.WebServer.SitecoreInstallPath -ChildPath "Website"
+    $filePath = Join-Path $filePath -ChildPath $pagePath
+    $html | out-file -FilePath $filePath
+
+    # Request the page
+    $baseUrl = [System.Uri](Get-SiteUrl)
+    $combinedUrl = New-Object System.Uri($baseUrl, $pagePath)
+    $result = Invoke-WebRequest $combinedUrl.ToString()
+    Remove-Item -Path $filePath
+
+    # Examine page content
+    [xml]$contentXml = $result.Content
+    try
+    {
+        $passwordSet = [System.Convert]::ToBoolean($contentXml.html.body.form.input.value) 
+    }
+    catch
+    {
+        $passwordSet = $false
+    }
+
+    if ($passwordSet)
+    {
+        Write-Message "...password was successfully changed." "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+    }
+    else
+    {
+        Write-Message "...unable to change default Sitecore admin password!" "Yellow" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+    }
 }
 #endregion
 
@@ -2530,7 +2723,7 @@ function Initialize-SitecoreInstaller([string]$configPath)
     [xml]$configXml = Read-InstallConfigFile $configPath
     if ($configXml -eq $null)
     {
-        throw ""
+        throw "configXml is null"
     }
 
     New-ConfigSettings $configXml
@@ -2557,7 +2750,7 @@ function Install-SitecoreApplication([string]$configPath, [bool]$SuppressOutputT
 
     try
     {
-        Initialize-SitecoreInstaller
+        Initialize-SitecoreInstaller $configPath
     }
     catch [Exception]
     {
@@ -2578,19 +2771,31 @@ function Install-SitecoreApplication([string]$configPath, [bool]$SuppressOutputT
     $message = "Starting Sitecore install [Sitecore.Kernel.dll version $(Get-SitecoreVersion $TRUE $TRUE)] - $date" 
     Write-Message $message "Green" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
 
+    $isCMRole = $false
     if ($script:configSettings.WebServer.CMServerSettings.Enabled)
     {
         $role = "CM"
-        if ($script:configSettings.WebServer.CMServerSettings.Publishing.Enabled)
+        if (Test-PublishingServerRole)
         {
             $role = "Publishing Server"
         }
+        $isCMRole = $true
     }
     elseif ($script:configSettings.WebServer.CDServerSettings.Enabled)
     {
         $role = "CD"
     }
     Write-Message "Configuring server for [$role] role." "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+
+    if ($isCMRole -and !$script:configSettings.WebServer.CMServerSettings.DefaultSitecoreAdminPassword)
+    {
+        Write-Message "Caution: the default Sitecore admin password should be changed. A new password wasn't supplied." "Yellow" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+    }
+
+    if (Test-ShouldSetAutogrowth)
+    {
+        Write-Message "Caution: cannot set autogrowth for web database(s) because database configuration is disabled." "Yellow" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+    }
 
     try
     {
@@ -2608,6 +2813,8 @@ function Install-SitecoreApplication([string]$configPath, [bool]$SuppressOutputT
         Set-SecuritySettings $iisSiteName
 
         Initialize-SitecoreDatabases
+
+        Set-DefaultAdminPassword
     }
     catch [Exception]
     {
