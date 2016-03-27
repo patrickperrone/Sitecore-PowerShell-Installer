@@ -25,7 +25,7 @@ The Sitecore-PowerShell-Installer script enables you to install Production-ready
 ### Requirements
 - SQL logins must exist prior to running script
 - SQL login used for install must either have the sysadmin role
-  - You may optionally turn off all database operations by disabling the <database> configuration element. Do this if database operations must be performed through some other process. Turning database operations removes this requirement.
+  - You may optionally turn off all database operations by disabling the &lt;database&gt; configuration element. Do this if database operations must be performed through some other process. Turning database operations removes this requirement.
 - The path used to install SQL files must exist and the targetted SQL instance must have FullControl
 - Must have a valid Sitecore .zip file
 
