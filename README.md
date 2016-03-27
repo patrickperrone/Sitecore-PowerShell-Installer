@@ -1,6 +1,6 @@
 Sitecore-PowerShell-Installer
 =============================
-The Sitecore-PowerShell-Installer script enables you to install Production-ready Sitecore instances from the command-line. This script supports installing Sitecore 8.0 and 8.1. If there is enough interest shown, I will consider retro-fitting it to earlier versions of Sitecore.
+The Sitecore-PowerShell-Installer script enables you to install Production-ready Sitecore instances from the command-line. This script supports installing Sitecore 8.0 and 8.1. I've provided some example .config files for standard Sitecore server roles to help get you started.
 
 ### Features of the Project
 - Install Sitecore with or without the databases.
@@ -25,16 +25,18 @@ The Sitecore-PowerShell-Installer script enables you to install Production-ready
 ### Requirements
 - SQL logins must exist prior to running script
 - SQL login used for install must either have the sysadmin role
+  - You may optionally turn off all database operations by disabling the &lt;database&gt; configuration element. Do this if database operations must be performed through some other process. Turning database operations removes this requirement.
 - The path used to install SQL files must exist and the targetted SQL instance must have FullControl
+  - As above, you may either turn off all database operations or disable installing the databases. If you only disable installing databases, the script will still try to ensure things like permisssions on the databases are set.
 - Must have a valid Sitecore .zip file
 
 ### How To Use
 1. Download script, config file, and .zip for desired Sitecore version
 2. Edit config file
-3. Run Powershell as Administrator and invoke ```.\install.ps1```
+3. Run Powershell as Administrator and invoke ```. .\install.ps1```
 
 ### Troubleshooting
 - If you see an error in PowerShell complaining that "the execution of scripts is disabled on this system." then you need to invoke ```Set-ExecutionPolicy -ExecutionPolicy unrestricted -Force```
-- If you receive a security warning after invoking ```.\install.ps1``` and want to make it go away permanently, then right-click on the install.ps1 file and "Unblock" it.
+- If you receive a security warning after invoking ```. .\install.ps1``` and want to make it go away permanently, then right-click on the install.ps1 file and "Unblock" it.
 
 This script was inspired by Alex Shyba's script: https://github.com/Sitecore/PowerShell-Script-Library
