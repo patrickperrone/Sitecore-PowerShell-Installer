@@ -282,7 +282,7 @@ function Add-CalculatedPropertiesToConfigurationSettings
 {
     # WebServer.SitecoreInstallPath
     $sitecoreInstallPath = Join-Path $script:configSettings.WebServer.SitecoreInstallRoot -ChildPath $script:configSettings.WebServer.SitecoreInstallFolder
-    $script:configSettings.WebServer | Add-Member –MemberType NoteProperty -Name SitecoreInstallPath –Value $sitecoreInstallPath
+    $script:configSettings.WebServer | Add-Member –MemberType NoteProperty -Name SitecoreInstallPath -Value $sitecoreInstallPath
 
     # WebServer.SitecoreLogPath
     $sitecoreLogPath = ""
