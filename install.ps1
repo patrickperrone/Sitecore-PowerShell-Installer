@@ -282,7 +282,7 @@ function Add-CalculatedPropertiesToConfigurationSettings
 {
     # WebServer.SitecoreInstallPath
     $sitecoreInstallPath = Join-Path $script:configSettings.WebServer.SitecoreInstallRoot -ChildPath $script:configSettings.WebServer.SitecoreInstallFolder
-    $script:configSettings.WebServer | Add-Member –MemberType NoteProperty -Name SitecoreInstallPath -Value $sitecoreInstallPath
+    $script:configSettings.WebServer | Add-Member -MemberType NoteProperty -Name SitecoreInstallPath -Value $sitecoreInstallPath
 
     # WebServer.SitecoreLogPath
     $sitecoreLogPath = ""
@@ -290,10 +290,10 @@ function Add-CalculatedPropertiesToConfigurationSettings
     {
         $sitecoreLogPath = Join-path $script:configSettings.WebServer.SitecoreInstallPath -ChildPath $script:configSettings.LogFileName
     }
-    $script:configSettings.WebServer | Add-Member –MemberType NoteProperty –Name SitecoreLogPath –Value $sitecoreLogPath
+    $script:configSettings.WebServer | Add-Member -MemberType NoteProperty -Name SitecoreLogPath -Value $sitecoreLogPath
 
     # Database.BaseConnectionString
-    $script:configSettings.Database | Add-Member –MemberType NoteProperty –Name BaseConnectionString –Value (Get-BaseConnectionString)
+    $script:configSettings.Database | Add-Member -MemberType NoteProperty -Name BaseConnectionString -Value (Get-BaseConnectionString)
 }
 
 function New-ConfigSettings([xml]$config)
@@ -319,10 +319,10 @@ function New-ConfigSettings([xml]$config)
         }
         [bool]$addToHostsFile = [System.Convert]::ToBoolean($binding.AddToHostsFile)
 
-        $b | Add-Member –MemberType NoteProperty –Name IP –Value $ip
-        $b | Add-Member –MemberType NoteProperty –Name Port –Value $port
-        $b | Add-Member –MemberType NoteProperty –Name HostHeader –Value $hostheader        
-        $b | Add-Member –MemberType NoteProperty –Name AddToHostsFile –Value $addToHostsFile
+        $b | Add-Member -MemberType NoteProperty -Name IP -Value $ip
+        $b | Add-Member -MemberType NoteProperty -Name Port -Value $port
+        $b | Add-Member -MemberType NoteProperty -Name HostHeader -Value $hostheader        
+        $b | Add-Member -MemberType NoteProperty -Name AddToHostsFile -Value $addToHostsFile
 
         $iisBindings.Add($b)
     }
@@ -332,9 +332,9 @@ function New-ConfigSettings([xml]$config)
     $parallel = New-Object -TypeName PSObject
     [int]$growthsize = $config.InstallSettings.WebServer.CMServerSettings.Publishing.Parallel.WebDatabaseAutoGrowthInMB
     [int]$degrees = $config.InstallSettings.WebServer.CMServerSettings.Publishing.Parallel.MaxDegreesOfParallelism
-    $parallel | Add-Member –MemberType NoteProperty –Name Enabled –Value (Get-ConfigOption $config "WebServer/CMServerSettings/Publishing/Parallel/enabled" $TRUE)
-    $parallel | Add-Member –MemberType NoteProperty –Name WebDatabaseAutoGrowthInMB –Value $growthsize
-    $parallel | Add-Member –MemberType NoteProperty –Name MaxDegreesOfParallelism –Value $degrees
+    $parallel | Add-Member -MemberType NoteProperty -Name Enabled -Value (Get-ConfigOption $config "WebServer/CMServerSettings/Publishing/Parallel/enabled" $TRUE)
+    $parallel | Add-Member -MemberType NoteProperty -Name WebDatabaseAutoGrowthInMB -Value $growthsize
+    $parallel | Add-Member -MemberType NoteProperty -Name MaxDegreesOfParallelism -Value $degrees
 
     $publishing = New-Object -TypeName PSObject
     $publishingInstance = $config.InstallSettings.WebServer.CMServerSettings.Publishing.PublishingInstance
@@ -347,10 +347,10 @@ function New-ConfigSettings([xml]$config)
     {
         $appPoolIdleTimeout = $appPoolIdleTimeout.Trim()
     }
-    $publishing | Add-Member –MemberType NoteProperty –Name Enabled –Value (Get-ConfigOption $config "WebServer/CMServerSettings/Publishing/enabled" $TRUE)
-    $publishing | Add-Member –MemberType NoteProperty –Name PublishingInstance –Value $publishingInstance
-    $publishing | Add-Member –MemberType NoteProperty –Name AppPoolIdleTimeout –Value $appPoolIdleTimeout
-    $publishing | Add-Member –MemberType NoteProperty –Name Parallel –Value $parallel
+    $publishing | Add-Member -MemberType NoteProperty -Name Enabled -Value (Get-ConfigOption $config "WebServer/CMServerSettings/Publishing/enabled" $TRUE)
+    $publishing | Add-Member -MemberType NoteProperty -Name PublishingInstance -Value $publishingInstance
+    $publishing | Add-Member -MemberType NoteProperty -Name AppPoolIdleTimeout -Value $appPoolIdleTimeout
+    $publishing | Add-Member -MemberType NoteProperty -Name Parallel -Value $parallel
 
     $cmServerSettings = New-Object -TypeName PSObject
     $instanceName = $config.InstallSettings.WebServer.CMServerSettings.InstanceName
@@ -363,21 +363,21 @@ function New-ConfigSettings([xml]$config)
     {
         $adminPassword = $adminPassword.Trim()
     }
-    $cmServerSettings | Add-Member –MemberType NoteProperty –Name Enabled –Value (Get-ConfigOption $config "WebServer/CMServerSettings/enabled" $TRUE)
-    $cmServerSettings | Add-Member –MemberType NoteProperty –Name InstanceName –Value $instanceName
-    $cmServerSettings | Add-Member –MemberType NoteProperty –Name DefaultSitecoreAdminPassword –Value $adminPassword
-    $cmServerSettings | Add-Member –MemberType NoteProperty –Name Publishing –Value $publishing
+    $cmServerSettings | Add-Member -MemberType NoteProperty -Name Enabled -Value (Get-ConfigOption $config "WebServer/CMServerSettings/enabled" $TRUE)
+    $cmServerSettings | Add-Member -MemberType NoteProperty -Name InstanceName -Value $instanceName
+    $cmServerSettings | Add-Member -MemberType NoteProperty -Name DefaultSitecoreAdminPassword -Value $adminPassword
+    $cmServerSettings | Add-Member -MemberType NoteProperty -Name Publishing -Value $publishing
     #endregion
 
     #region CDServerSettings
     $cdServerSettings = New-Object -TypeName PSObject
-    $cdServerSettings | Add-Member –MemberType NoteProperty –Name Enabled –Value (Get-ConfigOption $config "WebServer/CDServerSettings/enabled" $TRUE)
-    $cdServerSettings | Add-Member –MemberType NoteProperty –Name ApplyIPWhitelist –Value (Get-ConfigOption $config "WebServer/CDServerSettings/ApplyIPWhitelist")
-    $cdServerSettings | Add-Member –MemberType NoteProperty –Name DeactivateConnectionStrings –Value (Get-ConfigOption $config "WebServer/CDServerSettings/DeactivateConnectionStrings")
-    $cdServerSettings | Add-Member –MemberType NoteProperty –Name ConfigureFilesForCD –Value (Get-ConfigOption $config "WebServer/CDServerSettings/ConfigureFilesForCD")
-    $cdServerSettings | Add-Member –MemberType NoteProperty –Name PreventAnonymousAccess –Value (Get-ConfigOption $config "WebServer/CDServerSettings/PreventAnonymousAccess")
-    $cdServerSettings | Add-Member –MemberType NoteProperty –Name DenyExecutePermission –Value (Get-ConfigOption $config "WebServer/CDServerSettings/DenyExecutePermission")
-    $cdServerSettings | Add-Member –MemberType NoteProperty –Name DisableUploadWatcher –Value (Get-ConfigOption $config "WebServer/CDServerSettings/DisableUploadWatcher")
+    $cdServerSettings | Add-Member -MemberType NoteProperty -Name Enabled -Value (Get-ConfigOption $config "WebServer/CDServerSettings/enabled" $TRUE)
+    $cdServerSettings | Add-Member -MemberType NoteProperty -Name ApplyIPWhitelist -Value (Get-ConfigOption $config "WebServer/CDServerSettings/ApplyIPWhitelist")
+    $cdServerSettings | Add-Member -MemberType NoteProperty -Name DeactivateConnectionStrings -Value (Get-ConfigOption $config "WebServer/CDServerSettings/DeactivateConnectionStrings")
+    $cdServerSettings | Add-Member -MemberType NoteProperty -Name ConfigureFilesForCD -Value (Get-ConfigOption $config "WebServer/CDServerSettings/ConfigureFilesForCD")
+    $cdServerSettings | Add-Member -MemberType NoteProperty -Name PreventAnonymousAccess -Value (Get-ConfigOption $config "WebServer/CDServerSettings/PreventAnonymousAccess")
+    $cdServerSettings | Add-Member -MemberType NoteProperty -Name DenyExecutePermission -Value (Get-ConfigOption $config "WebServer/CDServerSettings/DenyExecutePermission")
+    $cdServerSettings | Add-Member -MemberType NoteProperty -Name DisableUploadWatcher -Value (Get-ConfigOption $config "WebServer/CDServerSettings/DisableUploadWatcher")
     #endregion
 
     #region IPWhiteList
@@ -409,8 +409,8 @@ function New-ConfigSettings([xml]$config)
         $shared = $shared.Trim()
     }
 
-    $sessionStateProvider | Add-Member –MemberType NoteProperty –Name Private –Value $private
-    $sessionStateProvider | Add-Member –MemberType NoteProperty –Name Shared –Value $shared
+    $sessionStateProvider | Add-Member -MemberType NoteProperty -Name Private -Value $private
+    $sessionStateProvider | Add-Member -MemberType NoteProperty -Name Shared -Value $shared
     #endregion
 
     #region Solr
@@ -422,7 +422,7 @@ function New-ConfigSettings([xml]$config)
         $serviceBaseAddress = $serviceBaseAddress.Trim()
     }
 
-    $solr | Add-Member –MemberType NoteProperty –Name ServiceBaseAddress –Value $serviceBaseAddress
+    $solr | Add-Member -MemberType NoteProperty -Name ServiceBaseAddress -Value $serviceBaseAddress
     #endregion
 
     #region MongoDb
@@ -437,8 +437,8 @@ function New-ConfigSettings([xml]$config)
     {
         $password = $password.Trim()
     }
-    $credentials | Add-Member –MemberType NoteProperty –Name Username –Value $username
-    $credentials | Add-Member –MemberType NoteProperty –Name Password –Value $password
+    $credentials | Add-Member -MemberType NoteProperty -Name Username -Value $username
+    $credentials | Add-Member -MemberType NoteProperty -Name Password -Value $password
 
     $hosts = New-Object 'System.Collections.Generic.List[PSObject]'
     foreach ($mongohost in ($config.InstallSettings.WebServer.MongoDb.Hosts.Host))
@@ -452,8 +452,8 @@ function New-ConfigSettings([xml]$config)
         }
         [int]$port = $mongohost.Port
 
-        $h | Add-Member –MemberType NoteProperty –Name HostName –Value $hostname
-        $h | Add-Member –MemberType NoteProperty –Name Port –Value $port
+        $h | Add-Member -MemberType NoteProperty -Name HostName -Value $hostname
+        $h | Add-Member -MemberType NoteProperty -Name Port -Value $port
 
         $hosts.Add($h)
     }
@@ -464,8 +464,8 @@ function New-ConfigSettings([xml]$config)
     {
         $options = $options.Trim()
     }
-    $mongodb | Add-Member –MemberType NoteProperty –Name Enabled –Value (Get-ConfigOption $config "WebServer/MongoDb/enabled" $TRUE)
-    $mongodb | Add-Member –MemberType NoteProperty –Name Credentials –Value $credentials
+    $mongodb | Add-Member -MemberType NoteProperty -Name Enabled -Value (Get-ConfigOption $config "WebServer/MongoDb/enabled" $TRUE)
+    $mongodb | Add-Member -MemberType NoteProperty -Name Credentials -Value $credentials
     $mongodb | Add-Member -MemberType NoteProperty -Name Hosts -Value $hosts
     $mongodb | Add-Member -MemberType NoteProperty -Name Options -Value $options
     #endregion
@@ -513,21 +513,21 @@ function New-ConfigSettings([xml]$config)
         $appPoolIdentityPassword = $appPoolIdentityPassword.Trim()
     }
 
-    $webserver | Add-Member –MemberType NoteProperty –Name LicenseFilePath –Value $licenseFilePath
-    $webserver | Add-Member –MemberType NoteProperty –Name SitecoreInstallRoot –Value $sitecoreInstallRoot
-    $webserver | Add-Member –MemberType NoteProperty –Name SitecoreInstallFolder –Value $sitecoreInstallFolder
-    $webserver | Add-Member –MemberType NoteProperty –Name LastChildFolderOfIncludeDirectory –Value $lastChildFolderOfIncludeDirectory
-    $webserver | Add-Member –MemberType NoteProperty –Name IISWebSiteName –Value $iisWebSiteName
-    $webserver | Add-Member –MemberType NoteProperty –Name DefaultRuntimeVersion –Value $defaultRuntimeVersion
-    $webserver | Add-Member –MemberType NoteProperty –Name AppPoolIdentity –Value $appPoolIdentity
-    $webserver | Add-Member –MemberType NoteProperty –Name AppPoolIdentityPassword –Value $appPoolIdentityPassword
-    $webserver | Add-Member –MemberType NoteProperty –Name IISBindings –Value $iisbindings
-    $webserver | Add-Member –MemberType NoteProperty –Name CMServerSettings –Value $cmServerSettings
-    $webserver | Add-Member –MemberType NoteProperty –Name CDServerSettings –Value $cdServerSettings
-    $webserver | Add-Member –MemberType NoteProperty –Name IPWhiteList –Value $ipWhiteList
-    $webserver | Add-Member –MemberType NoteProperty –Name SessionStateProvider –Value $sessionStateProvider
-    $webserver | Add-Member –MemberType NoteProperty –Name Solr –Value $solr
-    $webserver | Add-Member –MemberType NoteProperty –Name MongoDb –Value $mongodb
+    $webserver | Add-Member -MemberType NoteProperty -Name LicenseFilePath -Value $licenseFilePath
+    $webserver | Add-Member -MemberType NoteProperty -Name SitecoreInstallRoot -Value $sitecoreInstallRoot
+    $webserver | Add-Member -MemberType NoteProperty -Name SitecoreInstallFolder -Value $sitecoreInstallFolder
+    $webserver | Add-Member -MemberType NoteProperty -Name LastChildFolderOfIncludeDirectory -Value $lastChildFolderOfIncludeDirectory
+    $webserver | Add-Member -MemberType NoteProperty -Name IISWebSiteName -Value $iisWebSiteName
+    $webserver | Add-Member -MemberType NoteProperty -Name DefaultRuntimeVersion -Value $defaultRuntimeVersion
+    $webserver | Add-Member -MemberType NoteProperty -Name AppPoolIdentity -Value $appPoolIdentity
+    $webserver | Add-Member -MemberType NoteProperty -Name AppPoolIdentityPassword -Value $appPoolIdentityPassword
+    $webserver | Add-Member -MemberType NoteProperty -Name IISBindings -Value $iisbindings
+    $webserver | Add-Member -MemberType NoteProperty -Name CMServerSettings -Value $cmServerSettings
+    $webserver | Add-Member -MemberType NoteProperty -Name CDServerSettings -Value $cdServerSettings
+    $webserver | Add-Member -MemberType NoteProperty -Name IPWhiteList -Value $ipWhiteList
+    $webserver | Add-Member -MemberType NoteProperty -Name SessionStateProvider -Value $sessionStateProvider
+    $webserver | Add-Member -MemberType NoteProperty -Name Solr -Value $solr
+    $webserver | Add-Member -MemberType NoteProperty -Name MongoDb -Value $mongodb
     #endregion
 
     #region Database
@@ -544,8 +544,8 @@ function New-ConfigSettings([xml]$config)
             $name = $name.Trim()
         }
 
-        $db | Add-Member –MemberType NoteProperty –Name Name –Value $name
-        $db | Add-Member –MemberType NoteProperty –Name ConnectionStringName –Value $name.ToLower()
+        $db | Add-Member -MemberType NoteProperty -Name Name -Value $name
+        $db | Add-Member -MemberType NoteProperty -Name ConnectionStringName -Value $name.ToLower()
         $databases.Add($db)
     }
     #endregion
@@ -580,8 +580,8 @@ function New-ConfigSettings([xml]$config)
             $connectionStringName = $connectionStringName.Trim()
         }
 
-        $db | Add-Member –MemberType NoteProperty –Name Name –Value $copyname
-        $db | Add-Member –MemberType NoteProperty –Name ConnectionStringName –Value $connectionStringName
+        $db | Add-Member -MemberType NoteProperty -Name Name -Value $copyname
+        $db | Add-Member -MemberType NoteProperty -Name ConnectionStringName -Value $connectionStringName
         $webDatabaseCopies.Add($db)
     }
     #endregion
@@ -637,8 +637,8 @@ function New-ConfigSettings([xml]$config)
         $databaseNamePrefix = $databaseNamePrefix.Trim()
     }
     
-    $database | Add-Member –MemberType NoteProperty –Name Enabled –Value (Get-ConfigOption $config "Database/enabled" $TRUE)
-    $database | Add-Member –MemberType NoteProperty –Name InstallDatabase –Value (Get-ConfigOption $config "Database/InstallDatabase")
+    $database | Add-Member -MemberType NoteProperty -Name Enabled -Value (Get-ConfigOption $config "Database/enabled" $TRUE)
+    $database | Add-Member -MemberType NoteProperty -Name InstallDatabase -Value (Get-ConfigOption $config "Database/InstallDatabase")
     $database | Add-Member -MemberType NoteProperty -Name Databases -Value $databases
     $database | Add-Member -MemberType NoteProperty -Name WebDatabaseCopies -Value $webDatabaseCopies
     $database | Add-Member -MemberType NoteProperty -Name SqlServerName -Value $sqlServerName
@@ -646,7 +646,7 @@ function New-ConfigSettings([xml]$config)
     $database | Add-Member -MemberType NoteProperty -Name SqlLoginForInstallPassword -Value $sqlLoginForInstallPassword
     $database | Add-Member -MemberType NoteProperty -Name SqlLoginForDataAccess -Value $sqlLoginForDataAccess
     $database | Add-Member -MemberType NoteProperty -Name SqlLoginForDataAccessPassword -Value $sqlLoginForDataAccessPassword
-    $database | Add-Member –MemberType NoteProperty –Name UseWindowsAuthenticationForSqlDataAccess –Value (Get-ConfigOption $config "Database/UseWindowsAuthenticationForSqlDataAccess")
+    $database | Add-Member -MemberType NoteProperty -Name UseWindowsAuthenticationForSqlDataAccess -Value (Get-ConfigOption $config "Database/UseWindowsAuthenticationForSqlDataAccess")
     $database | Add-Member -MemberType NoteProperty -Name DatabaseInstallPath -Value $databaseInstallPath
     $database | Add-Member -MemberType NoteProperty -Name DatabaseNamePrefix -Value $databaseNamePrefix
     #endregion
@@ -664,11 +664,11 @@ function New-ConfigSettings([xml]$config)
         $sitecoreZipPath = $sitecoreZipPath.Trim()
     }
 
-    $script:configSettings | Add-Member –MemberType NoteProperty –Name LogFileName –Value $logFileName            
-    $script:configSettings | Add-Member –MemberType NoteProperty –Name SitecoreZipPath –Value $sitecoreZipPath
-    $script:configSettings | Add-Member –MemberType NoteProperty –Name SuppressPrompts –Value (Get-ConfigOption $config "SuppressPrompts")
-    $script:configSettings | Add-Member –MemberType NoteProperty –Name WebServer –Value $webserver
-    $script:configSettings | Add-Member –MemberType NoteProperty –Name Database –Value $database
+    $script:configSettings | Add-Member -MemberType NoteProperty -Name LogFileName -Value $logFileName            
+    $script:configSettings | Add-Member -MemberType NoteProperty -Name SitecoreZipPath -Value $sitecoreZipPath
+    $script:configSettings | Add-Member -MemberType NoteProperty -Name SuppressPrompts -Value (Get-ConfigOption $config "SuppressPrompts")
+    $script:configSettings | Add-Member -MemberType NoteProperty -Name WebServer -Value $webserver
+    $script:configSettings | Add-Member -MemberType NoteProperty -Name Database -Value $database
 }
 #endregion
 
