@@ -2144,23 +2144,16 @@ function Set-ConfigurationFiles
     $installPath = $script:configSettings.WebServer.SitecoreInstallPath
     $currentDate = (Get-Date).ToString("yyyyMMdd_hh-mm-s")
 
-    #region Edit sitecore.config
-    if ($sitecoreVersion -eq 8.1)
-    {
-        $sitecoreConfigPath = Join-Path $installPath -ChildPath "Website\App_Config\sitecore.config"
-        $sitecoreConfig = [xml](Get-Content $sitecoreConfigPath)
-        $backup = $sitecoreConfigPath + "__$currentDate"
-        Write-Message "Backing up sitecore.config" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
-        $sitecoreConfig.Save($backup)
-        $backupFiles.Add($backup)
+    #region Edit DataFolder.config file
+    $dataFolderConfigExamplePath = Join-Path $installPath -ChildPath "Website\App_Config\Include\DataFolder.config.example"
+    $dataFolderConfigPath = Join-Path $installPath -ChildPath "Website\App_Config\Include\DataFolder.config"
+    Copy-Item -Path $dataFolderConfigExamplePath -Destination $dataFolderConfigPath
 
-        # Set dataFolder path
-        $dataFolderPath = Join-Path $installPath -ChildPath "Data"
-        $sitecoreConfig.SelectSingleNode("sitecore/sc.variable[@name='dataFolder']").SetAttribute("value", $dataFolderPath)
-
-        Write-Message "Saving sitecore.config" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
-        $sitecoreConfig.Save($sitecoreConfigPath)
-    }
+    # Set dataFolder path
+    $dataFolderConfig = [xml](Get-Content $dataFolderConfigPath)
+    $dataFolderPath = Join-Path $installPath -ChildPath "Data"
+    $dataFolderConfig.configuration.sitecore."sc.variable".FirstChild.'#text' = $dataFolderPath.ToString()
+    $dataFolderConfig.Save($dataFolderConfigPath)
     #endregion
 
     #region Edit web.config
@@ -2170,12 +2163,6 @@ function Set-ConfigurationFiles
     Write-Message "Backing up Web.config" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     $webconfig.Save($backup)
     $backupFiles.Add($backup)
-
-    if ($sitecoreVersion -eq 8.0)
-    {
-        $dataFolderPath = Join-Path $installPath -ChildPath "Data"
-        $webconfig.configuration.SelectSingleNode("sitecore/sc.variable[@name='dataFolder']").SetAttribute("value", $dataFolderPath)
-    }
 
     # Modify sessionState element    
     if ($script:configSettings.WebServer.SessionStateProvider.Private.ToLower() -eq "mssql")
