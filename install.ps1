@@ -8,10 +8,10 @@ $hostScreenAvailable = $FALSE
 #region Utility Functions
 function Write-Message([string]$Message, [string]$MessageColor="White", [bool]$WriteToLogOnly=$FALSE, [bool]$WriteToLog=$FALSE, [bool]$HostConsoleAvailable=$FALSE)
 {
-    if (!([string]::IsNullOrEmpty($script:configSettings.SitecoreLogPath)) -and $WriteToLog)
+    if (!([string]::IsNullOrEmpty($script:configSettings.WebServer.SitecoreLogPath)) -and $WriteToLog)
     {
         # Write message to log file
-        Add-Content $logPath $Message
+        Add-Content $script:configSettings.WebServer.SitecoreLogPath $Message
     }
 
     if (!$WriteToLogOnly)
