@@ -31,8 +31,8 @@ The Sitecore-PowerShell-Installer script enables you to install Production-ready
 - Must have a valid Sitecore .zip file
 
 ### How To Use
-1. Download script, config file, and .zip for desired Sitecore version
-2. Edit config file
+1. Download [script](https://github.com/patrickperrone/Sitecore-PowerShell-Installer/archive/master.zip) and .zip for desired Sitecore version
+2. Edit config file; watch [video](https://www.youtube.com/watch?v=xFp0cUWsLXA) for explanation of settings and sample config files.
 3. Run Powershell as Administrator and invoke ```. .\install.ps1```
 
 ### Troubleshooting
