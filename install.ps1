@@ -1078,7 +1078,7 @@ function Test-ConfigurationSettings
         return $FALSE
     }
 
-    if ($script:configSettings.WebServer.IISBindings.ChildNodes.Count -lt 1)
+    if ($script:configSettings.WebServer.IISBindings.Count -lt 1)
     {
         Write-Message "IISBindings should provide at least one Binding." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
         return $FALSE
