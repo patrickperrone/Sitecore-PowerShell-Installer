@@ -133,8 +133,8 @@ function Get-SqlServerSmo
         # Use Windows authentication
         $sqlServerSmo.ConnectionContext.LoginSecure = $TRUE
         $sqlServerSmo.ConnectionContext.ConnectAsUser = $TRUE 
-		$sqlServerSmo.ConnectionContext.ConnectAsUserName  = $split[1]
-		$sqlServerSmo.ConnectionContext.ConnectAsUserPassword = $script:configSettings.Database.SqlLoginForInstallPassword
+        $sqlServerSmo.ConnectionContext.ConnectAsUserName  = $split[1]
+        $sqlServerSmo.ConnectionContext.ConnectAsUserPassword = $script:configSettings.Database.SqlLoginForInstallPassword
     }
     else
     {
@@ -707,15 +707,18 @@ function Test-PreRequisites
         return $FALSE
     }
 
-    $moduleName = "SQLPS"
-    if (!(Test-Module $moduleName))
+    if ($script:configSettings.Database.Enabled)
     {
-        Write-Message "Warning: SQL PowerShell Module ($moduleName) is not installed." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
-        return $FALSE
-    }
-    else
-    {
-        Set-Location -Path $scriptDir
+        $moduleName = "SQLPS"
+        if (!(Test-Module $moduleName))
+        {
+            Write-Message "Warning: SQL PowerShell Module ($moduleName) is not installed." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+            return $FALSE
+        }
+        else
+        {
+            Set-Location -Path $scriptDir
+        }
     }
 
     $moduleName = "WebAdministration"
@@ -2155,7 +2158,6 @@ function Set-ConfigurationFiles
     $dataFolderConfig.configuration.sitecore."sc.variable".FirstChild.'#text' = $dataFolderPath.ToString()
     $dataFolderConfig.Save($dataFolderConfigPath)
     #endregion
-
     #region Edit web.config
     $webConfigPath = Join-Path $installPath -ChildPath "Website\web.config"
     $webconfig = [xml](Get-Content $webConfigPath)
