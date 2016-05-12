@@ -2158,6 +2158,7 @@ function Set-ConfigurationFiles
     $dataFolderConfig.configuration.sitecore."sc.variable".FirstChild.'#text' = $dataFolderPath.ToString()
     $dataFolderConfig.Save($dataFolderConfigPath)
     #endregion
+    
     #region Edit web.config
     $webConfigPath = Join-Path $installPath -ChildPath "Website\web.config"
     $webconfig = [xml](Get-Content $webConfigPath)
