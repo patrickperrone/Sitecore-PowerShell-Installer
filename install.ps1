@@ -2158,7 +2158,7 @@ function Set-ConfigurationFiles
     $dataFolderConfig.configuration.sitecore."sc.variable".FirstChild.'#text' = $dataFolderPath.ToString()
     $dataFolderConfig.Save($dataFolderConfigPath)
     #endregion
-    
+
     #region Edit web.config
     $webConfigPath = Join-Path $installPath -ChildPath "Website\web.config"
     $webconfig = [xml](Get-Content $webConfigPath)
@@ -2167,9 +2167,12 @@ function Set-ConfigurationFiles
     $webconfig.Save($backup)
     $backupFiles.Add($backup)
 
-    # Modify sessionState element    
+    # Modify sessionState element and provider    
     if ($script:configSettings.WebServer.SessionStateProvider.Private.ToLower() -eq "mssql")
     {
+        $webconfig.configuration.SelectSingleNode("system.web/sessionState/providers/add[@name='mssql']").SetAttribute("sessionType", "private")
+        Write-Message "Setting sessionType attribute value of MSSQL provider to private." "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+
         $webconfig.configuration.SelectSingleNode("system.web/sessionState").SetAttribute("mode", "Custom")
         $webconfig.configuration.SelectSingleNode("system.web/sessionState").SetAttribute("customProvider", "mssql")
         Write-Message "Changing private session state provider to MSSQL" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
@@ -2373,8 +2376,8 @@ function Set-ConfigurationFiles
         $attribute.Value = "true"
         $element.Attributes.Append($attribute) | Out-Null
         #sessionType
-        $attribute = $trackerConfig.CreateAttribute("shared")
-        $attribute.Value = "true"
+        $attribute = $trackerConfig.CreateAttribute("sessionType")
+        $attribute.Value = "shared"
         $element.Attributes.Append($attribute) | Out-Null
         $node.AppendChild($element) | Out-Null
 
