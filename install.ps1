@@ -2708,18 +2708,18 @@ function Set-DefaultAdminPassword()
 
 function Initialize-SitecoreInstaller([string]$configPath)
 {
-    if (!(Test-PreRequisites))
-    {
-        throw "Please satisfy pre-requisites and try again."
-    }
-    
     [xml]$configXml = Read-InstallConfigFile $configPath
     if ($configXml -eq $null)
     {
         throw "configXml is null"
     }
 
-    New-ConfigSettings $configXml
+    New-ConfigSettings $configXml    
+        
+    if (!(Test-PreRequisites))
+    {
+        throw "Please satisfy pre-requisites and try again."
+    }
 
     $configIsValid = Test-ConfigurationSettings
     if (!$configIsValid)
