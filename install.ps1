@@ -350,7 +350,9 @@ function New-ConfigSettings([xml]$config)
     $publishing | Add-Member -MemberType NoteProperty -Name Enabled -Value (Get-ConfigOption $config "WebServer/CMServerSettings/Publishing/enabled" $TRUE)
     $publishing | Add-Member -MemberType NoteProperty -Name PublishingInstance -Value $publishingInstance
     $publishing | Add-Member -MemberType NoteProperty -Name AppPoolIdleTimeout -Value $appPoolIdleTimeout
+    $publishing | Add-Member -MemberType NoteProperty -Name DisableScheduledTaskExecution -Value (Get-ConfigOption $config "WebServer/CMServerSettings/Publishing/DisableScheduledTaskExecution")
     $publishing | Add-Member -MemberType NoteProperty -Name Parallel -Value $parallel
+
 
     $cmServerSettings = New-Object -TypeName PSObject
     $instanceName = $config.InstallSettings.WebServer.CMServerSettings.InstanceName
@@ -2470,6 +2472,24 @@ function Set-ConfigurationFiles
                 $parallelConfig.configuration.SelectSingleNode("sitecore/settings/setting[@name='Publishing.MaxDegreeOfParallelism']").ChildNodes[0].InnerText = $maxDegrees
                 Write-Message "Saving changes to Sitecore.Publishing.Parallel.config" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
                 $parallelConfig.Save($parallelConfigPath)
+
+
+                # Edit Sitecore.Publishing.DedicatedInstance.config
+                if (!$script:configSettings.WebServer.CMServerSettings.Publishing.DisableScheduledTaskExecution)
+                {
+                    $file = Get-ChildItem -Recurse -Filter "Sitecore.Publishing.DedicatedInstance.config" -Path (Join-Path $installPath -ChildPath "Website")
+                    $dedicatedInstanceConfigPath = $file.FullName
+                    $dedicatedInstanceConfig = [xml](Get-Content $dedicatedInstanceConfigPath)
+                    $currentDate = (Get-Date).ToString("yyyyMMdd_hh-mm-s")
+                    $backup = $dedicatedInstanceConfigPath + "__$currentDate"
+                    Write-Message "Backing up Sitecore.Publishing.DedicatedInstance.config" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+                    $dedicatedInstanceConfig.Save($backup)
+                    $backupFiles.Add($backup)
+                    $node = $dedicatedInstanceConfig.configuration.SelectSingleNode("sitecore/scheduling/frequency")
+                    $node.ParentNode.InnerXml = $node.ParentNode.InnerXml.Replace($node.OuterXml, $node.OuterXml.Insert(0, "<!--").Insert($node.OuterXml.Length+4, "-->"))
+                    Write-Message "Saving changes to Sitecore.Publishing.DedicatedInstance.config" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+                    $dedicatedInstanceConfig.Save($dedicatedInstanceConfigPath)
+                }
             }
         }
     }
