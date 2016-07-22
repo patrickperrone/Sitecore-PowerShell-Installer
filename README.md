@@ -20,7 +20,9 @@ The Sitecore-PowerShell-Installer script enables you to install Production-ready
 
 ### Software Dependencies
 - Web Server (IIS) Administration: https://technet.microsoft.com/en-us/library/ee790599.aspx
-- SQL Server PowerShell: https://msdn.microsoft.com/en-us/library/hh245198.aspx
+- SQL Server PowerShell
+  - Description: https://msdn.microsoft.com/en-us/library/hh245198.aspx
+  - Install Instructions: http://guidestomicrosoft.com/2015/01/13/install-sql-server-powershell-module-sqlps/
 
 ### Requirements
 - SQL logins must exist prior to running script
