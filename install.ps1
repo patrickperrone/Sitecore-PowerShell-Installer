@@ -380,6 +380,7 @@ function New-ConfigSettings([xml]$config)
     $cdServerSettings | Add-Member -MemberType NoteProperty -Name PreventAnonymousAccess -Value (Get-ConfigOption $config "WebServer/CDServerSettings/PreventAnonymousAccess")
     $cdServerSettings | Add-Member -MemberType NoteProperty -Name DenyExecutePermission -Value (Get-ConfigOption $config "WebServer/CDServerSettings/DenyExecutePermission")
     $cdServerSettings | Add-Member -MemberType NoteProperty -Name DisableUploadWatcher -Value (Get-ConfigOption $config "WebServer/CDServerSettings/DisableUploadWatcher")
+    $cdServerSettings | Add-Member -MemberType NoteProperty -Name DisableExperienceAnalyticsAssemblies -Value (Get-ConfigOption $config "WebServer/CDServerSettings/DisableExperienceAnalyticsAssemblies")
     #endregion
 
     #region IPWhiteList
@@ -1809,7 +1810,6 @@ function Get-FilesToDisableOnCDServer
                    "App_Config\Include\ExperienceAnalytics\Sitecore.ExperienceAnalytics.Reduce.config",
                    "App_Config\Include\ExperienceAnalytics\Sitecore.ExperienceAnalytics.StorageProviders.config",
                    "App_Config\Include\ExperienceAnalytics\Sitecore.ExperienceAnalytics.WebAPI.config",
-                   "bin\ExperienceAnalytics\Sitecore.ExperienceAnalytics.Client.dll",
                
                    # Experience Profile
                    "App_Config\Include\ExperienceProfile\Sitecore.ExperienceProfile.config",
@@ -1975,10 +1975,7 @@ function Get-FilesToEnableOnCDServer
                    # Marketing Platform
                    "App_Config\Include\ScalabilitySettings.config",
                    #"App_Config\Include\Sitecore.EngagementAutomation.LiveSessionAgent.Processing.config", # this appears to be a mistake in the documentation, does not ship with vanilla install
-                   "App_Config\Include\SwitchMasterToWeb.config",
-
-                   # Experience Analytics
-                   "bin\Sitecore.ExperienceAnalytics.dll"
+                   "App_Config\Include\SwitchMasterToWeb.config"
                    )
 
     # Based on https://doc.sitecore.net/sitecore_experience_platform/xdb_configuration/configure_a_content_delivery_server
@@ -2060,6 +2057,32 @@ function Enable-FilesForCDServer
         else
         {
             Write-Message "File not found on server: $fileToEnable" "Yellow" -WriteToLogOnly $TRUE -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        }
+    }
+}
+
+function Disable-ExperienceAnalyticsAssemblies
+{
+    $webrootPath = Join-Path $script:configSettings.WebServer.SitecoreInstallPath -ChildPath "Website"
+    $assemblies = @(
+                   "bin\Sitecore.ExperienceAnalytics.dll",
+                   "bin\Sitecore.ExperienceAnalytics.Client.dll",
+                   "bin\Sitecore.ExperienceAnalytics.ReAggregation.dll"
+                   )
+
+    Write-Message "Disabling ExperienceAnalytics assemblies." "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+    foreach ($file in ($assemblies | % { Join-Path $webrootPath -ChildPath $_ }))
+    {        
+        if (Test-Path $file)
+        {
+            $fileName = Split-Path $file -leaf
+            $newName = $fileName + ".disabled"
+            Rename-Item -Path $file -NewName $newName
+            Write-Message "Disabled: $file" "White" -WriteToLogOnly $TRUE -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        }
+        else
+        {
+            Write-Message "File not found on server: $file" "Yellow" -WriteToLogOnly $TRUE -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
         }
     }
 }
@@ -2415,6 +2438,11 @@ function Set-ConfigurationFiles
     {
         Disable-FilesForCDServer
         Enable-FilesForCDServer
+    }
+
+    if ($script:configSettings.WebServer.CDServerSettings.Enabled -and $script:configSettings.WebServer.CDServerSettings.DisableExperienceAnalyticsAssemblies)
+    {
+        Disable-ExperienceAnalyticsAssemblies
     }
 
     if ($script:configSettings.WebServer.CMServerSettings.Enabled)
