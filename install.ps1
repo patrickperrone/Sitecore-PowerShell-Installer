@@ -911,11 +911,9 @@ function Test-SupportedSitecoreVersion
 {
     $versionToInstall = Get-SitecoreVersion $TRUE
 
-    if ($versionToInstall -eq "8.0")
-    {
-        return $TRUE
-    }
-    elseif ($versionToInstall -eq "8.1")
+    if ($versionToInstall -eq "8.0" `
+    -or $versionToInstall -eq "8.1" `
+    -or $versionToInstall -eq "10.0")
     {
         return $TRUE
     }
@@ -1933,6 +1931,113 @@ function Get-FilesToDisableOnCDServer
                    "App_Config\Include\Social\Sitecore.Social.Solr.IndexConfiguration.config"
                    )
 
+    # Based on https://doc.sitecore.net/sitecore_experience_platform/xdb_configuration/configure_a_content_delivery_server
+    $filesFor82 = @(
+                   # SPEAK
+                   "App_Config\Include\001.Sitecore.Speak.Important.config",
+                   "App_Config\Include\Sitecore.Speak.AntiCsrf.SheerUI.config",
+                   "App_Config\Include\Sitecore.Speak.Applications.config",
+                   "App_Config\Include\Sitecore.Speak.Components.AntiCsrf.config",
+                   "App_Config\Include\Sitecore.Speak.Components.Mvc.config",
+                   "App_Config\Include\Sitecore.Speak.Components.config",
+                   "App_Config\Include\Sitecore.Speak.config",
+                   "App_Config\Include\Sitecore.Speak.ItemWebApi.config",
+                   "App_Config\Include\Sitecore.Speak.LaunchPad.config",
+
+                   # Platform
+                   "App_Config\Include\Sitecore.WebDAV.config",
+                   "App_Config\Include\Sitecore.Processing.config",
+
+                   # Marketing Foundation
+                   "App_Config\Include\Sitecore.Analytics.Automation.TimeoutProcessing.config",
+                   "App_Config\Include\Sitecore.Analytics.Processing.Aggregation.config",
+                   "App_Config\Include\Sitecore.Analytics.Processing.Aggregation.Services.config",
+                   "App_Config\Include\Sitecore.Analytics.Processing.config",
+                   "App_Config\Include\Sitecore.Analytics.Processing.Services.config",
+                   "App_Config\Include\Sitecore.Analytics.Reporting.config",
+                   "App_Config\Include\Sitecore.Marketing.Client.config",
+                   "App_Config\Include\Sitecore.Shell.MarketingAutomation.config",
+                   "App_Config\Include\Sitecore.EngagementAutomation.Processing.Aggregation.config",
+                   "App_Config\Include\Sitecore.EngagementAutomation.Processing.Aggregation.Services.config",
+                   "App_Config\Include\Sitecore.EngagementAutomation.Processing.config",
+                   "App_Config\Include\Sitecore.EngagementAutomation.TimeoutProcessing.config",                   
+
+                   # Path Analyzer
+                   "App_Config\Include\Sitecore.PathAnalyzer.Client.config",
+                   "App_Config\Include\Sitecore.PathAnalyzer.config",
+                   "App_Config\Include\Sitecore.PathAnalyzer.Processing.config",
+                   "App_Config\Include\Sitecore.PathAnalyzer.Services.config",
+                   "App_Config\Include\Sitecore.PathAnalyzer.StorageProviders.config",
+ 
+                   # Content Testing
+                   "App_Config\Include\ContentTesting\Sitecore.ContentTesting.Processing.Aggregation.config",
+                   "App_Config\Include\ContentTesting\Sitecore.ContentTesting.ApplicationDependencies.config",
+                   "App_Config\Include\ContentTesting\Sitecore.ContentTesting.Client.RulePerformance.config",
+
+                   # Experience Analytics
+                   "App_Config\Include\ContentTesting\Sitecore.ExperienceAnalytics.config",
+                   "App_Config\Include\ExperienceAnalytics\Sitecore.ExperienceAnalytics.Aggregation.config",
+                   "App_Config\Include\ExperienceAnalytics\Sitecore.ExperienceAnalytics.Client.config",
+                   "App_Config\Include\ExperienceAnalytics\Sitecore.ExperienceAnalytics.Reduce.config",
+                   "App_Config\Include\ExperienceAnalytics\Sitecore.ExperienceAnalytics.StorageProviders.config",
+                   "App_Config\Include\ExperienceAnalytics\Sitecore.ExperienceAnalytics.WebAPI.config",
+
+                   # Experience Profile
+                   "App_Config\Include\ExperienceProfile\Sitecore.ExperienceProfile.config",
+                   "App_Config\Include\ExperienceProfile\Sitecore.ExperienceProfile.Client.config",
+                   "App_Config\Include\ExperienceProfile\Sitecore.ExperienceProfile.Reporting.config",
+
+                   # FXM
+                   "App_Config\Include\FXM\Sitecore.FXM.Speak.config",
+
+                   # List Management
+                   "App_Config\Include\ListManagement\Sitecore.ListManagement.Client.config",
+                   "App_Config\Include\ListManagement\Sitecore.ListManagement.config",
+                   "App_Config\Include\ListManagement\Sitecore.ListManagement.Services.config",
+
+                   # Social Connected
+                   "App_Config\Include\Social\Sitecore.Social.ExperienceProfile.config",
+                   
+                   # Exec Insight Dashboard
+                   "\sitecore\shell\Applications\Reports\Dashboard\CampaignCategoryDefaultSettings.config",
+                   "\sitecore\shell\Applications\Reports\Dashboard\Configuration.config",
+                   "\sitecore\shell\Applications\Reports\Dashboard\DefaultSettings.config",
+                   "\sitecore\shell\Applications\Reports\Dashboard\SingleCampaignDefaultSettings.config",
+                   "\sitecore\shell\Applications\Reports\Dashboard\SingleTrafficTypeDefaultSettings.config",
+
+                   # Search-related configs, using Lucene as provider
+                   "App_Config\Include\Sitecore.ContentSearch.Lucene.Index.Master.config",
+                   "App_Config\Include\Sitecore.ContentSearch.Solr.DefaultIndexConfiguration.config",
+                   "App_Config\Include\Sitecore.ContentSearch.Solr.Index.Analytics.config",
+                   "App_Config\Include\Sitecore.ContentSearch.Solr.Index.Core.config",
+                   "App_Config\Include\Sitecore.ContentSearch.Solr.Index.Master.config",
+                   "App_Config\Include\Sitecore.ContentSearch.Solr.Index.Web.config",
+                   "App_Config\Include\Sitecore.Speak.ContentSearch.Lucene.config",
+                   "App_Config\Include\Sitecore.ContentTesting.Lucene.IndexConfiguration.config",
+                   "App_Config\Include\ContentTesting\Sitecore.ContentTesting.Lucene.IndexConfiguration.config",
+                   "App_Config\Include\Sitecore.Marketing.Definitions.MarketingAssets.Repositories.Lucene.Index.Master.config",
+                   "App_Config\Include\Sitecore.Marketing.Definitions.MarketingAssets.Repositories.Solr.Index.Master.config",
+                   "App_Config\Include\Sitecore.Marketing.Definitions.MarketingAssets.Repositories.Solr.Index.Web.config",
+                   "App_Config\Include\Sitecore.Marketing.Definitions.MarketingAssets.Repositories.Solr.IndexConfiguration.config",
+                   "App_Config\Include\Sitecore.Marketing.Lucene.Index.Master.config",
+                   "App_Config\Include\Sitecore.Marketing.Solr.Index.Master.config",
+                   "App_Config\Include\Sitecore.Marketing.Solr.Index.Web.config",
+                   "App_Config\Include\Sitecore.Marketing.Solr.IndexConfiguration.config",
+                   "App_Config\Include\FXM\Sitecore.FXM.Lucene.DomainsSearch.Index.Master.config",
+                   "App_Config\Include\FXM\Sitecore.FXM.Lucene.DomainsSearch.Index.Web.config",
+                   "App_Config\Include\FXM\Sitecore.FXM.Solr.DomainsSearch.DefaultIndexConfiguration.config",
+                   "App_Config\Include\FXM\Sitecore.FXM.Solr.DomainsSearch.Index.Master.config",
+                   "App_Config\Include\FXM\Sitecore.FXM.Solr.DomainsSearch.Index.Web.config",
+                   "App_Config\Include\ListManagement\Sitecore.ListManagement.Lucene.Index.List.config",
+                   "App_Config\Include\ListManagement\Sitecore.ListManagement.Lucene.IndexConfiguration.config",
+                   "App_Config\Include\ListManagement\Sitecore.ListManagement.Solr.Index.List.config",
+                   "App_Config\Include\ListManagement\Sitecore.ListManagement.Solr.IndexConfiguration.config",
+                   "App_Config\Include\Social\Sitecore.Social.Lucene.Index.Master.config",
+                   "App_Config\Include\Social\Sitecore.Social.Solr.Index.Master.config",
+                   "App_Config\Include\Social\Sitecore.Social.Solr.Index.Web.config",
+                   "App_Config\Include\Social\Sitecore.Social.Solr.IndexConfiguration.config"
+                   )
+
     [decimal]$sitecoreVersion = Get-SitecoreVersion
     if ($sitecoreVersion -eq "8.0")
     {        
@@ -1941,6 +2046,10 @@ function Get-FilesToDisableOnCDServer
     elseif ($sitecoreVersion -eq "8.1")
     {
         return $filesFor81 | % { Join-Path $webrootPath -ChildPath $_ }
+    }
+    elseif ($sitecoreVersion -eq "10.0")
+    {
+        return $filesFor82 | % { Join-Path $webrootPath -ChildPath $_ }
     }
     else
     {
@@ -1993,6 +2102,22 @@ function Get-FilesToEnableOnCDServer
                    "App_Config\Include\Social\Sitecore.Social.ScalabilitySettings.config"
                    )
 
+    # Based on https://doc.sitecore.net/sitecore_experience_platform/xdb_configuration/configure_a_content_delivery_server
+    $filesFor82 = @(
+                   # Platform
+                   "App_Config\Include\CacheContainers.config",
+
+                   # Marketing Platform
+                   "App_Config\Include\ScalabilitySettings.config",
+                   "App_Config\Include\Sitecore.Analytics.MarketingTaxonomyCD.config",
+                   "App_Config\Include\Sitecore.Marketing.Definitions.MarketingAssets.RepositoriesCD.config",
+                   "App_Config\Include\Sitecore.MarketingCD.config",
+                   "App_Config\Include\Z.SwitchMasterToWeb\SwitchMasterToWeb.config",
+
+                   # Social Connected
+                   "App_Config\Include\Social\Sitecore.Social.ScalabilitySettings.config"
+                   )
+
     [decimal]$sitecoreVersion = Get-SitecoreVersion
     if ($sitecoreVersion -eq "8.0")
     {        
@@ -2001,6 +2126,10 @@ function Get-FilesToEnableOnCDServer
     elseif ($sitecoreVersion -eq "8.1")
     {
         return $filesFor81 | % { Join-Path $webrootPath -ChildPath $_ }
+    }
+    elseif ($sitecoreVersion -eq "10.0")
+    {
+        return $filesFor82 | % { Join-Path $webrootPath -ChildPath $_ }
     }
     else
     {
