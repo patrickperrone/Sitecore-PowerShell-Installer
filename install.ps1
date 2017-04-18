@@ -1342,18 +1342,20 @@ function Copy-DatabaseFiles([string]$zipPath)
     $item = Find-FolderInZipFile $shell.NameSpace($zipPath).Items() "Databases"
     foreach($childItem in $shell.NameSpace($item.Path).Items())
     {
+        $childItemName = Split-Path -Path $childItem.Path -Leaf
+
         # Rename SQL Analytics database files to avoid confusion
-        if ($childItem.Name -eq "Sitecore.Analytics.ldf")
+        if ($childItemName -eq "Sitecore.Analytics.ldf")
         {
             $fileName = "Sitecore.Reporting.ldf"
         }
-        elseif ($childItem.Name -eq "Sitecore.Analytics.mdf")
+        elseif ($childItemName -eq "Sitecore.Analytics.mdf")
         {
             $fileName = "Sitecore.Reporting.mdf"
         }
         else
         {
-            $fileName = $childItem.Name
+            $fileName = $childItemName
         }
         
         $filePath = Join-Path $dbFolderPath -ChildPath $fileName
@@ -1366,20 +1368,20 @@ function Copy-DatabaseFiles([string]$zipPath)
         {
             $shell.NameSpace($dbFolderPath).CopyHere($childItem)
 
-            if ($childItem.Name.ToLower() -like "sitecore.web.*")
+            if ($childItemName.ToLower() -like "sitecore.web.*")
             {
                 # Make copies of the web Database as required
                 foreach ($copy in $script:configSettings.Database.WebDatabaseCopies)
                 {
-                    $copyFilePath = Join-Path $dbFolderPath -ChildPath (Get-SubstituteDatabaseFileName $childItem.Name $copy.Name)
+                    $copyFilePath = Join-Path $dbFolderPath -ChildPath (Get-SubstituteDatabaseFileName $childItemName $copy.Name)
                     Copy-Item $filePath $copyFilePath
                 }
             }
 
             # Rename Analytics database files to Reporting
-            if ($childItem.Name.ToLower() -like "sitecore.analytics.*")
+            if ($childItemName.ToLower() -like "sitecore.analytics.*")
             {
-                Rename-Item "$dbFolderPath\$($childItem.Name)" (Get-SubstituteDatabaseFileName $childItem.Name "Reporting")
+                Rename-Item "$dbFolderPath\$($childItemName)" (Get-SubstituteDatabaseFileName $childItemName "Reporting")
             }
         }
     }
