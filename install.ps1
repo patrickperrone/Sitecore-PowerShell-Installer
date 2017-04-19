@@ -2501,6 +2501,15 @@ function Set-ConfigurationFiles
         Write-Message "Commenting out connection strings not need on CD server" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     }
 
+    # Comment out reporting.apikey connectionstring if it is blank. If we do not comment this out, the heartbeat fails
+    $node = $connectionStringsConfig.SelectSingleNode("connectionStrings/add[@name='reporting.apikey']")
+    if (($node -ne $null) -and ([string]::IsNullOrEmpty($node.connectionString)))
+    {
+        $node.ParentNode.InnerXml = $node.ParentNode.InnerXml.Replace($node.OuterXml, $node.OuterXml.Insert(0, "<!--").Insert($node.OuterXml.Length+4, "-->"))
+
+        Write-Message "Commenting out reporting.apikey connection strings as it is not defined" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+    }
+
     Write-Message "Saving ConnectionStrings.config" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     $connectionStringsConfig.Save($connectionStringsPath)
     #endregion
