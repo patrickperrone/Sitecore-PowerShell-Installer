@@ -1,6 +1,6 @@
 Sitecore-PowerShell-Installer
 =============================
-The Sitecore-PowerShell-Installer script enables you to install Production-ready Sitecore instances from the command-line. This script supports installing Sitecore 8.0 and 8.1. I've provided some example .config files for standard Sitecore server roles to help get you started.
+The Sitecore-PowerShell-Installer script enables you to install Production-ready Sitecore instances from the command-line. This script supports installing Sitecore 8.0, 8.1, and 8.2. I've provided some example .config files for standard Sitecore server roles to help get you started.
 
 ### Features of the Project
 - Install Sitecore with or without the databases.
@@ -23,6 +23,7 @@ The Sitecore-PowerShell-Installer script enables you to install Production-ready
 - SQL Server PowerShell
   - Description: https://msdn.microsoft.com/en-us/library/hh245198.aspx
   - Install Instructions: http://guidestomicrosoft.com/2015/01/13/install-sql-server-powershell-module-sqlps/
+- ImportExcel PowerShell Module: used to process Sitecore's Config Enable/Disable [spreadsheet](https://doc.sitecore.net/sitecore_experience_platform/setting_up_and_maintaining/xdb/configuring_servers/server_configuration_resources)
 
 ### Requirements
 - SQL logins must exist prior to running script
