@@ -1,5 +1,5 @@
 # Specify a path to the .config file if you do not wish to put the .config file in the same directory as the script
-$configPath = ""
+$configPath = "C:\Projects\PowerShellScripts\SitecoreInstaller\myinstall.CD.config"
 $scriptDir = Split-Path (Resolve-Path $myInvocation.MyCommand.Path)
 $configSettings = $null
 # Assume there is no host console available until we can read the config file.
@@ -53,7 +53,7 @@ function Read-InstallConfigFile([string]$configPath)
         }
         else
         {
-            Write-Message "Could not find configuration file at specified path: $confgPath" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+            Write-Message "Could not find configuration file at specified path: $configPath" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
         }
     }
 
@@ -278,6 +278,65 @@ function Test-IsUserMemberOfLocalGroup([string]$groupName, [string]$userName)
     return $FALSE
 }
 
+function New-SitecoreConfigurationCsvFile($excelPath)
+{
+    # Creates a csv with 'dummy' header, we do this to guarantee that 
+    # we can create the csv file without requiring the first row to be
+    # populated.
+    Import-Excel $excelPath -WorkSheetname 1 -DataOnly -NoHeader `
+        | Where-Object { $_.'P1' -ne "GENERAL CONFIGURATION"  } `
+        | Export-Csv -Path $script:configSettings.ConfigurationFilesCsvPath -NoTypeInformation
+
+    # Remove top line from csv file
+    (Get-Content $script:configSettings.ConfigurationFilesCsvPath | Select-Object -Skip 1) | Set-Content $script:configSettings.ConfigurationFilesCsvPath
+}
+
+function Get-SitecoreConfigurationFiles
+{
+    [CmdletBinding()]
+    param
+    (
+        [parameter(Position=0, Mandatory=$true)]
+        [ValidateSet("CM", "CD")]
+        [string]$ServerRole,
+        [parameter(Position=1, Mandatory=$true)]
+        [ValidateSet("Enable", "Disable")]
+        [string]$ConfigFilter
+    )
+    process
+    {
+        
+        $files = @()
+
+        $roleName = "Content Management (CM)"
+        if ($ServerRole -eq "CD")
+        {
+            $roleName = "Content Delivery (CD)"
+        }
+
+        Import-Csv $script:configSettings.ConfigurationFilesCsvPath `
+        | Where-Object `
+            {
+                $_.$($roleName).Trim() -eq $ConfigFilter `
+                -and !($_.'Search Provider Used'.Contains("Solr")) `
+                -and !($_.'Search Provider Used'.Contains("Azure")) `
+            } `
+        | ForEach-Object `
+            {
+                $fileName = $_.'Config file name'.Trim()
+
+                if (!$fileName.EndsWith(".config"))
+                {
+                    $fileName = [IO.Path]::GetFileNameWithoutExtension($fileName)
+                }
+
+                $files += (Join-Path $_.'File Path'.Trim() -ChildPath $fileName)
+            }
+
+        return $files
+    }
+}
+
 function Add-CalculatedPropertiesToConfigurationSettings
 {
     # WebServer.SitecoreInstallPath
@@ -294,6 +353,9 @@ function Add-CalculatedPropertiesToConfigurationSettings
 
     # Database.BaseConnectionString
     $script:configSettings.Database | Add-Member -MemberType NoteProperty -Name BaseConnectionString -Value (Get-BaseConnectionString)
+
+    # ConfigurationFilesCsvPath
+    $script:configSettings | Add-Member -MemberType NoteProperty -Name ConfigurationFilesCsvPath -Value (Join-Path $script:configSettings.WebServer.SitecoreInstallPath -ChildPath "configFiles.csv")
 }
 
 function New-ConfigSettings([xml]$config)
@@ -328,6 +390,24 @@ function New-ConfigSettings([xml]$config)
     }
     #endregion
 
+    #region Analytics
+    $analytics = New-Object -TypeName PSObject
+
+    $clusterName = $config.InstallSettings.WebServer.Analytics.ClusterName
+    if (!([string]::IsNullOrEmpty($clusterName)))
+    {
+        $clusterName = $clusterName.Trim()
+    }
+    $hostName = $config.InstallSettings.WebServer.Analytics.HostName
+    if (!([string]::IsNullOrEmpty($hostName)))
+    {
+        $hostName = $hostName.Trim()
+    }
+
+    $analytics | Add-Member -MemberType NoteProperty -Name ClusterName -Value $clusterName
+    $analytics | Add-Member -MemberType NoteProperty -Name HostName -Value $hostName
+    #endregion
+
     #region CMServerSettings
     $parallel = New-Object -TypeName PSObject
     [int]$growthsize = $config.InstallSettings.WebServer.CMServerSettings.Publishing.Parallel.WebDatabaseAutoGrowthInMB
@@ -355,18 +435,12 @@ function New-ConfigSettings([xml]$config)
 
 
     $cmServerSettings = New-Object -TypeName PSObject
-    $instanceName = $config.InstallSettings.WebServer.CMServerSettings.InstanceName
-    if (!([string]::IsNullOrEmpty($instanceName)))
-    {
-        $instanceName = $instanceName.Trim()
-    }
     $adminPassword = $config.InstallSettings.WebServer.CMServerSettings.DefaultSitecoreAdminPassword
     if (!([string]::IsNullOrEmpty($adminPassword)))
     {
         $adminPassword = $adminPassword.Trim()
     }
     $cmServerSettings | Add-Member -MemberType NoteProperty -Name Enabled -Value (Get-ConfigOption $config "WebServer/CMServerSettings/enabled" $TRUE)
-    $cmServerSettings | Add-Member -MemberType NoteProperty -Name InstanceName -Value $instanceName
     $cmServerSettings | Add-Member -MemberType NoteProperty -Name DefaultSitecoreAdminPassword -Value $adminPassword
     $cmServerSettings | Add-Member -MemberType NoteProperty -Name Publishing -Value $publishing
     #endregion
@@ -491,6 +565,16 @@ function New-ConfigSettings([xml]$config)
     {
         $sitecoreInstallFolder = $sitecoreInstallFolder.Trim()
     }
+    $sitecoreInstanceName = $config.InstallSettings.WebServer.SitecoreInstanceName
+    if (!([string]::IsNullOrEmpty($sitecoreInstanceName)))
+    {
+        $sitecoreInstanceName = $sitecoreInstanceName.Trim()
+    }
+    $reportingApiKey = $config.InstallSettings.WebServer.ReportingApiKey
+    if (!([string]::IsNullOrEmpty($reportingApiKey)))
+    {
+        $reportingApiKey = $reportingApiKey.Trim()
+    }
     $lastChildFolderOfIncludeDirectory = $config.InstallSettings.WebServer.LastChildFolderOfIncludeDirectory
     if (!([string]::IsNullOrEmpty($lastChildFolderOfIncludeDirectory)))
     {
@@ -520,12 +604,15 @@ function New-ConfigSettings([xml]$config)
     $webserver | Add-Member -MemberType NoteProperty -Name LicenseFilePath -Value $licenseFilePath
     $webserver | Add-Member -MemberType NoteProperty -Name SitecoreInstallRoot -Value $sitecoreInstallRoot
     $webserver | Add-Member -MemberType NoteProperty -Name SitecoreInstallFolder -Value $sitecoreInstallFolder
+    $webserver | Add-Member -MemberType NoteProperty -Name SitecoreInstanceName -Value $sitecoreInstanceName
+    $webserver | Add-Member -MemberType NoteProperty -Name ReportingApiKey -Value $reportingApiKey
     $webserver | Add-Member -MemberType NoteProperty -Name LastChildFolderOfIncludeDirectory -Value $lastChildFolderOfIncludeDirectory
     $webserver | Add-Member -MemberType NoteProperty -Name IISWebSiteName -Value $iisWebSiteName
     $webserver | Add-Member -MemberType NoteProperty -Name DefaultRuntimeVersion -Value $defaultRuntimeVersion
     $webserver | Add-Member -MemberType NoteProperty -Name AppPoolIdentity -Value $appPoolIdentity
     $webserver | Add-Member -MemberType NoteProperty -Name AppPoolIdentityPassword -Value $appPoolIdentityPassword
     $webserver | Add-Member -MemberType NoteProperty -Name IISBindings -Value $iisbindings
+    $webserver | Add-Member -MemberType NoteProperty -Name Analytics -Value $analytics
     $webserver | Add-Member -MemberType NoteProperty -Name CMServerSettings -Value $cmServerSettings
     $webserver | Add-Member -MemberType NoteProperty -Name CDServerSettings -Value $cdServerSettings
     $webserver | Add-Member -MemberType NoteProperty -Name IPWhiteList -Value $ipWhiteList
@@ -667,9 +754,15 @@ function New-ConfigSettings([xml]$config)
     {
         $sitecoreZipPath = $sitecoreZipPath.Trim()
     }
+    $sitecoreConfigSpreadsheetPath = $config.InstallSettings.SitecoreConfigSpreadsheetPath
+    if (!([string]::IsNullOrEmpty($sitecoreConfigSpreadsheetPath)))
+    {
+        $sitecoreConfigSpreadsheetPath = $sitecoreConfigSpreadsheetPath.Trim()
+    }
 
     $script:configSettings | Add-Member -MemberType NoteProperty -Name LogFileName -Value $logFileName            
     $script:configSettings | Add-Member -MemberType NoteProperty -Name SitecoreZipPath -Value $sitecoreZipPath
+    $script:configSettings | Add-Member -MemberType NoteProperty -Name SitecoreConfigSpreadsheetPath -Value $sitecoreConfigSpreadsheetPath
     $script:configSettings | Add-Member -MemberType NoteProperty -Name SuppressPrompts -Value (Get-ConfigOption $config "SuppressPrompts")
     $script:configSettings | Add-Member -MemberType NoteProperty -Name WebServer -Value $webserver
     $script:configSettings | Add-Member -MemberType NoteProperty -Name Database -Value $database
@@ -730,6 +823,17 @@ function Test-PreRequisites
     {
         Write-Message "Warning: IIS PowerShell Module ($moduleName) is not installed." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
         return $FALSE
+    }
+
+    $versionToInstall = Get-SitecoreVersion $TRUE
+    if ($versionToInstall -eq "10.0")
+    {
+        $moduleName = "ImportExcel"
+        if (!(Test-Module $moduleName))
+        {
+            Write-Message "Warning: Import-Excel Module ($moduleName) is not installed." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+            return $FALSE
+        }
     }
 
     return $TRUE
@@ -911,11 +1015,9 @@ function Test-SupportedSitecoreVersion
 {
     $versionToInstall = Get-SitecoreVersion $TRUE
 
-    if ($versionToInstall -eq "8.0")
-    {
-        return $TRUE
-    }
-    elseif ($versionToInstall -eq "8.1")
+    if ($versionToInstall -eq "8.0" `
+    -or $versionToInstall -eq "8.1" `
+    -or $versionToInstall -eq "10.0")
     {
         return $TRUE
     }
@@ -1047,6 +1149,33 @@ function Test-ConfigurationSettings
         }
     }
 
+    $versionToInstall = Get-SitecoreVersion $TRUE
+    if ($versionToInstall -eq "10.0")
+    {
+        if ([string]::IsNullOrEmpty($script:configSettings.SitecoreConfigSpreadsheetPath))
+        {
+            Write-Message "SitecoreConfigSpreadsheetPath cannot be null or empty" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+            return $FALSE
+        }
+        else
+        {
+            if (!(Test-Path $script:configSettings.SitecoreConfigSpreadsheetPath))
+            {
+                Write-Message "Couldn't find file specified by SitecoreConfigSpreadsheetPath" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+                return $FALSE
+            }
+        }
+
+        if (![string]::IsNullOrEmpty($script:configSettings.WebServer.ReportingApiKey))
+        {
+            if ($script:configSettings.WebServer.ReportingApiKey.Length -lt 32)
+            {
+                Write-Message "ReportingApiKey should have a minimum of 32 characters." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+                return $FALSE
+            }
+        }
+    }
+
     if ([string]::IsNullOrEmpty($script:configSettings.WebServer.LicenseFilePath))
     {
         Write-Message "LicenseFilePath cannot be null or empty" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
@@ -1147,7 +1276,7 @@ function Test-ConfigurationSettings
     {
         if (!([string]::IsNullOrEmpty($script:configSettings.WebServer.CMServerSettings.Publishing.InstanceName)))
         {
-            if ([string]::IsNullOrEmpty($script:configSettings.WebServer.CMServerSettings.InstanceName))
+            if ([string]::IsNullOrEmpty($script:configSettings.WebServer.SitecoreInstanceName))
             {
                 Write-Message "You cannot use a Publishing.InstanceName without also specifying an InstanceName." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
                 return $FALSE
@@ -1261,7 +1390,6 @@ function Test-ConfigurationSettings
         }
     }
 
-    $versionToInstall = Get-SitecoreVersion $TRUE
     if ($versionToInstall -eq "8.0")
     {
         if ((Test-PublishingServerRole) -or
@@ -1444,7 +1572,12 @@ function Copy-SitecoreFiles
         }
     }
     
-    $licenseInstallPath = Join-Path $installPath -ChildPath "Data\license.xml"
+    $licenseInstallPath = Join-Path $installPath -ChildPath "Data\license"
+    if (!(Test-Path $licenseInstallPath))
+    {
+        New-Item $licenseInstallPath -type directory -force | Out-Null
+    }
+    $licenseInstallPath = Join-Path $licenseInstallPath -ChildPath "license.xml"
     Copy-Item -Path $script:configSettings.WebServer.LicenseFilePath -Destination $licenseInstallPath
 
     Write-Message "File copying done!" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
@@ -1942,6 +2075,11 @@ function Get-FilesToDisableOnCDServer
     {
         return $filesFor81 | % { Join-Path $webrootPath -ChildPath $_ }
     }
+    elseif ($sitecoreVersion -eq "10.0")
+    {
+        return Get-SitecoreConfigurationFiles -ServerRole CD -ConfigFilter Disable `
+        | % { Join-Path $script:configSettings.WebServer.SitecoreInstallPath -ChildPath $_ }
+    }
     else
     {
         throw [System.InvalidOperationException] "Sitecore version [$sitecoreVersion] is not supported by this installer."
@@ -1950,7 +2088,7 @@ function Get-FilesToDisableOnCDServer
 
 function Disable-FilesForCDServer
 {
-    Write-Message "Disabling files not needed on CD server." "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+    Write-Message "Disabling config files not needed on CD server." "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     foreach ($file in Get-FilesToDisableOnCDServer)
     {        
         if (Test-Path $file)
@@ -2002,6 +2140,11 @@ function Get-FilesToEnableOnCDServer
     {
         return $filesFor81 | % { Join-Path $webrootPath -ChildPath $_ }
     }
+    elseif ($sitecoreVersion -eq "10.0")
+    {
+        return Get-SitecoreConfigurationFiles -ServerRole CD -ConfigFilter Enable `
+        | % { Join-Path $script:configSettings.WebServer.SitecoreInstallPath -ChildPath $_ }
+    }
     else
     {
         throw [System.InvalidOperationException] "Sitecore version [$sitecoreVersion] is not supported by this installer."
@@ -2010,7 +2153,7 @@ function Get-FilesToEnableOnCDServer
 
 function Enable-FilesForCDServer
 {
-    Write-Message "Enabling files required by a CD server." "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+    Write-Message "Enabling config files required by a CD server." "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     foreach ($fileToEnable in Get-FilesToEnableOnCDServer)
     {
         if (Test-Path $fileToEnable)
@@ -2229,6 +2372,13 @@ function Set-ConfigurationFiles
         $node = $webconfig.configuration.SelectSingleNode("system.webServer/modules/add[@name='SitecoreUploadWatcher']")
         $node.ParentNode.InnerXml = $node.ParentNode.InnerXml.Replace($node.OuterXml, $node.OuterXml.Insert(0, "<!--").Insert($node.OuterXml.Length+4, "-->"))
     }
+    
+    # Modify license file path
+    if ($versionToInstall -eq "8.0")
+    {
+        Write-Message "Changing license file path" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        $sitecoreConfig.configuration.SelectSingleNode("sitecore/settings/setting[@name='LicenseFile']").SetAttribute("value", "`$(dataFolder)/license/license.xml")
+    }
 
     Write-Message "Saving changes to Web.config" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     $webconfig.Save($webConfigPath)
@@ -2300,7 +2450,7 @@ function Set-ConfigurationFiles
         $sessionElement.Attributes.Append($sessionAttr) | Out-Null
 
         $connectionStringsConfig.DocumentElement.AppendChild($sessionElement) | Out-Null
-        Write-Message "Addedd a session connection string" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        Write-Message "Added a session connection string" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     }
 
     # Modify MongoDB connection strings
@@ -2370,11 +2520,42 @@ function Set-ConfigurationFiles
         Write-Message "Commenting out connection strings not need on CD server" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     }
 
+    # Set the reporting.apikey connection string
+    $node = $connectionStringsConfig.SelectSingleNode("connectionStrings/add[@name='reporting.apikey']")
+    if ($node -ne $null)
+    {
+        # Write a reporting.apikey
+        if (![string]::IsNullOrEmpty($script:configSettings.WebServer.ReportingApiKey))
+        {
+            $node.SetAttribute("connectionString", $script:configSettings.WebServer.ReportingApiKey)
+        }
+    }
+
     Write-Message "Saving ConnectionStrings.config" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     $connectionStringsConfig.Save($connectionStringsPath)
     #endregion
 
-    #region Edit Sitecore.Analytics.Tracker.config
+    #region Edit Sitecore.config...
+    if ($versionToInstall -ne "8.0")
+    {
+        #TODO only do this for version xxx and above, otherwise I must modify web.config
+        $sitecoreConfigPath = Join-Path $installPath -ChildPath "Website\App_Config\Sitecore.config"
+        $sitecoreConfig = [xml](Get-Content $sitecoreConfigPath)
+        $backup = $sitecoreConfigPath + "__$currentDate"
+        Write-Message "Backing up Sitecore.config" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        $sitecoreConfig.Save($backup)
+        $backupFiles.Add($backup)
+
+        # Modify license file path
+        Write-Message "Changing license file path" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        $sitecoreConfig.SelectSingleNode("sitecore/settings/setting[@name='LicenseFile']").SetAttribute("value", "`$(dataFolder)/license/license.xml")
+
+        Write-Message "Saving Sitecore.config" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        $sitecoreConfig.Save($sitecoreConfigPath)
+    }
+    #endregion
+
+    #region Edit Sitecore.Analytics.Tracking.config
     if ($script:configSettings.WebServer.SessionStateProvider.Shared.ToLower() -eq "mssql")
     {
         $trackerPath = Join-Path $installPath -ChildPath "Website\App_Config\Include\Sitecore.Analytics.Tracking.config"
@@ -2432,6 +2613,36 @@ function Set-ConfigurationFiles
         Write-Message "Saving changes to Sitecore.Analytics.Tracker.config" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
         $trackerConfig.Save($trackerPath)
     }
+
+    if (!([string]::IsNullOrEmpty($script:configSettings.WebServer.Analytics.ClusterName)) `
+        -or !([string]::IsNullOrEmpty($script:configSettings.WebServer.Analytics.HostName)))
+    {
+        $trackerPath = Join-Path $installPath -ChildPath "Website\App_Config\Include\Sitecore.Analytics.Tracking.config"
+        $trackerConfig = [xml](Get-Content $trackerPath)
+
+        $backup = $trackerPath + "__$currentDate"
+        if (!$backupFiles.Contains($backup))
+        {
+            Write-Message "Backing up Sitecore.Analytics.Tracker.config" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+            $trackerConfig.Save($backup)
+            $backupFiles.Add($backup)
+        }
+
+        if (!([string]::IsNullOrEmpty($script:configSettings.WebServer.Analytics.ClusterName)))
+        {
+            $trackerConfig.configuration.SelectSingleNode("sitecore/settings/setting[@name='Analytics.ClusterName']").SetAttribute("value", $script:configSettings.WebServer.Analytics.ClusterName)
+            Write-Message "Changing Analytics.ClusterName" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        }
+
+        if (!([string]::IsNullOrEmpty($script:configSettings.WebServer.Analytics.HostName)))
+        {
+            $trackerConfig.configuration.SelectSingleNode("sitecore/settings/setting[@name='Analytics.HostName']").SetAttribute("value", $script:configSettings.WebServer.Analytics.HostName)
+            Write-Message "Changing Analytics.HostName" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        }
+
+        Write-Message "Saving changes to Sitecore.Analytics.Tracker.config" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        $trackerConfig.Save($trackerPath)
+    }
     #endregion
 
     #region Edit Sitecore.ContentSearch.Solr.DefaultIndexConfiguration.config.example
@@ -2470,33 +2681,35 @@ function Set-ConfigurationFiles
         Disable-SitecoreVersionPage
     }
 
+    $scalabilityConfigPath = Join-Path $installPath -ChildPath "Website\App_Config\Include\ScalabilitySettings.config"
+    if (Test-Path $scalabilityConfigPath)
+    {
+        # Do nothing, file is already enabled.
+    }
+    elseif (Test-Path ($scalabilityConfigPath + ".*"))
+    {
+        # Enable the file
+        $match = Get-Item ($scalabilityConfigPath + ".*") | Select-Object -First 1
+
+        Copy-Item -Path $match -Destination $scalabilityConfigPath
+        Write-Message "Enabled: $scalabilityConfigPath" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+    }
+
+    # Edit ScalabilitySettings.config - set Sitecore's instance name
+    $scalabilityConfigPath = Join-Path $installPath -ChildPath "Website\App_Config\Include\ScalabilitySettings.config"
+    $scalabilityConfig = [xml](Get-Content $scalabilityConfigPath)
+    $currentDate = (Get-Date).ToString("yyyyMMdd_hh-mm-s")
+    $backup = $scalabilityConfigPath + "__$currentDate"
+    Write-Message "Backing up ScalabilitySettings.config" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+    $scalabilityConfig.Save($backup)
+    $backupFiles.Add($backup)
+    $instanceName = $script:configSettings.WebServer.SitecoreInstanceName
+    $scalabilityConfig.configuration.SelectSingleNode("sitecore/settings/setting[@name='InstanceName']").ChildNodes[0].InnerText = $instanceName
+    Write-Message "Saving changes to ScalabilitySettings.config" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+    $scalabilityConfig.Save($scalabilityConfigPath)
+
     if ($script:configSettings.WebServer.CMServerSettings.Enabled)
     {
-        $scalabilityConfigPath = Join-Path $installPath -ChildPath "Website\App_Config\Include\ScalabilitySettings.config"
-        if (Test-Path $scalabilityConfigPath)
-        {
-            # Do nothing, file is already enabled.
-        }
-        elseif (Test-Path ($scalabilityConfigPath + ".*"))
-        {
-            # Enable the file
-            $match = Get-Item ($scalabilityConfigPath + ".*") | Select-Object -First 1
-
-            Copy-Item -Path $match -Destination $scalabilityConfigPath
-            Write-Message "Enabled: $scalabilityConfigPath" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
-        }
-
-        # Edit ScalabilitySettings.config
-        $scalabilityConfigPath = Join-Path $installPath -ChildPath "Website\App_Config\Include\ScalabilitySettings.config"
-        $scalabilityConfig = [xml](Get-Content $scalabilityConfigPath)
-        $currentDate = (Get-Date).ToString("yyyyMMdd_hh-mm-s")
-        $backup = $scalabilityConfigPath + "__$currentDate"
-        Write-Message "Backing up ScalabilitySettings.config" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
-        $scalabilityConfig.Save($backup)
-        $backupFiles.Add($backup)
-        $instanceName = $script:configSettings.WebServer.CMServerSettings.InstanceName
-        $scalabilityConfig.configuration.SelectSingleNode("sitecore/settings/setting[@name='InstanceName']").ChildNodes[0].InnerText = $instanceName
-
         $publishingInstanceName = $script:configSettings.WebServer.CMServerSettings.Publishing.PublishingInstance
         if (!([string]::IsNullOrEmpty($publishingInstanceName)))
         {
@@ -2802,10 +3015,20 @@ function Initialize-SitecoreInstaller([string]$configPath)
     
     Add-CalculatedPropertiesToConfigurationSettings
 
-    # Create install directory
+    # Create install directory    
     if (!(Test-Path $script:configSettings.WebServer.SitecoreInstallPath))
     {
-        New-Item $installPath -type directory -force | Out-Null
+        New-Item $script:configSettings.WebServer.SitecoreInstallPath -type directory -force | Out-Null
+    }
+
+    $versionToInstall = Get-SitecoreVersion $TRUE
+    if ($versionToInstall -eq "10.0")
+    {
+        New-SitecoreConfigurationCsvFile $script:configSettings.SitecoreConfigSpreadsheetPath
+    }
+    else
+    {
+        $script:configSettings.ConfigurationFilesCsvPath = $null
     }
 }
 
