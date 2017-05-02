@@ -1777,6 +1777,10 @@ function Set-ApplicationPoolIdentity($pool)
         # Set identity type for a "SpecificUser"
         $pool.processModel.identityType = 3
     }
+    else
+    {
+        $pool.processModel.identityType = $script:configSettings.WebServer.AppPoolIdentity
+    }
 
     $pool | Set-Item
 
