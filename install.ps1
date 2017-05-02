@@ -2916,7 +2916,7 @@ function Add-AppPoolIdentityToLocalGroup([string]$groupName, [string]$iisSiteNam
     {
         $group = [ADSI]"WinNT://$env:COMPUTERNAME/$groupName,group"
         $group.Add("WinNT://$domain/$userName,user")
-        Write-Message "$userName added a member of $groupName" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        Write-Message "$userName added as a member of $groupName" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     }
 }
 
