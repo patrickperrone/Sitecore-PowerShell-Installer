@@ -1600,17 +1600,13 @@ function Attach-SitecoreDatabase([string]$databaseName, [Microsoft.SqlServer.Man
 
         # Get paths of the data and log file
         $dbFolderPath = Get-DatabaseInstallFolderPath $TRUE
-        if (!($dbFolderPath.EndsWith("\")))
-        {
-            $dataFilePath = $dbFolderPath + "\"
-            $logFilePath = $dbFolderPath + "\"
-        }
-        $dataFilePath += "Sitecore.$databaseName.mdf";
-        $logFilePath += "Sitecore.$databaseName.ldf";
 
+        $dataFilePath = Join-Path $dbFolderPath -ChildPath "Sitecore.$databaseName.mdf"
+        $logFilePath = Join-Path $dbFolderPath -ChildPath "Sitecore.$databaseName.ldf"
+		
         $files = New-Object System.Collections.Specialized.StringCollection 
-        $files.Add($dataFilePath) | Out-Null; 
-        $files.Add($logFilePath) | Out-Null;
+        $files.Add($dataFilePath) | Out-Null
+        $files.Add($logFilePath) | Out-Null
 
         # Try attaching
         try
