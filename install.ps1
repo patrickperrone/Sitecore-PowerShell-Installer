@@ -1389,7 +1389,6 @@ function Test-ConfigurationSettings
         }
     }
 
-	# Todo: check for 8.1, 8.2
     if ($versionToInstall -eq "8.0")
     {
         if ((Test-PublishingServerRole) -or
@@ -2500,7 +2499,6 @@ function Set-ConfigurationFiles
     }
     
     # Modify license file path
-	# Todo: check 8.1, 8.2
     if ($versionToInstall -eq "8.0")
     {
         Write-Message "Changing license file path" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
