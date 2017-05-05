@@ -416,10 +416,6 @@ function New-ConfigSettings([xml]$config)
     $parallel | Add-Member -MemberType NoteProperty -Name WebDatabaseAutoGrowthInMB -Value $growthsize
     $parallel | Add-Member -MemberType NoteProperty -Name MaxDegreesOfParallelism -Value $degrees
 
-	
-    $recovery = New-Object -TypeName PSObject
-	$recovery | Add-Member -MemberType NoteProperty -Name Enabled -Value (Get-ConfigOption $config "WebServer/CMServerSettings/Publishing/Recovery/enabled" $TRUE)
-
     $publishing = New-Object -TypeName PSObject
     $publishingInstance = $config.InstallSettings.WebServer.CMServerSettings.Publishing.PublishingInstance
     if (!([string]::IsNullOrEmpty($publishingInstance)))
@@ -436,7 +432,6 @@ function New-ConfigSettings([xml]$config)
     $publishing | Add-Member -MemberType NoteProperty -Name AppPoolIdleTimeout -Value $appPoolIdleTimeout
     $publishing | Add-Member -MemberType NoteProperty -Name DisableScheduledTaskExecution -Value (Get-ConfigOption $config "WebServer/CMServerSettings/Publishing/DisableScheduledTaskExecution")
     $publishing | Add-Member -MemberType NoteProperty -Name Parallel -Value $parallel
-    $publishing | Add-Member -MemberType NoteProperty -Name Recovery -Value $recovery
 
     $cmServerSettings = New-Object -TypeName PSObject
     $adminPassword = $config.InstallSettings.WebServer.CMServerSettings.DefaultSitecoreAdminPassword
@@ -2390,7 +2385,6 @@ function Get-FilesToEnableOnPublishingServer
                # this file is optionally enabled for Parallel publishing
                "App_Config\Include\Sitecore.Publishing.Parallel.config",
 
-			   # this file will optionally enable Publishing Recovery
                "App_Config\Include\Sitecore.Publishing.Recovery.config"
 
                )
@@ -2443,13 +2437,6 @@ function Enable-FilesForPublishingServer
             elseif ($filename -eq "Sitecore.Publishing.Parallel.config")
             {
                 if (!$script:configSettings.WebServer.CMServerSettings.Publishing.Parallel.Enabled)
-                {
-                    continue
-                }
-            }
-            elseif ($filename -eq "Sitecore.Publishing.Recovery.config")
-            {
-                if (!$script:configSettings.WebServer.CMServerSettings.Publishing.Recovery.Enabled)
                 {
                     continue
                 }
