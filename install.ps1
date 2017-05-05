@@ -433,7 +433,6 @@ function New-ConfigSettings([xml]$config)
     $publishing | Add-Member -MemberType NoteProperty -Name DisableScheduledTaskExecution -Value (Get-ConfigOption $config "WebServer/CMServerSettings/Publishing/DisableScheduledTaskExecution")
     $publishing | Add-Member -MemberType NoteProperty -Name Parallel -Value $parallel
 
-
     $cmServerSettings = New-Object -TypeName PSObject
     $adminPassword = $config.InstallSettings.WebServer.CMServerSettings.DefaultSitecoreAdminPassword
     if (!([string]::IsNullOrEmpty($adminPassword)))
@@ -2301,7 +2300,7 @@ function Enable-FilesForCDServer
 
                     $fileToEnable = Join-Path $folderPath -ChildPath $filename
                 }
-                elseif ($sitecoreVersion -eq 8.1)
+                elseif ($sitecoreVersion -gt 8.0)
                 {
                     $newFolderName = $script:configSettings.WebServer.LastChildFolderOfIncludeDirectory
                     if (!([string]::IsNullOrEmpty($newFolderName)))
@@ -2383,7 +2382,10 @@ function Get-FilesToEnableOnPublishingServer
                "App_Config\Include\Sitecore.Publishing.Optimizations.config",
 
                # this file is optionally enabled for Parallel publishing
-               "App_Config\Include\Sitecore.Publishing.Parallel.config"
+               "App_Config\Include\Sitecore.Publishing.Parallel.config",
+
+               "App_Config\Include\Sitecore.Publishing.Recovery.config"
+
                )
 
     return $files | % { Join-Path $webrootPath -ChildPath $_ }
@@ -2414,16 +2416,16 @@ function Enable-FilesForPublishingServer
                     # Create a new folder, this folder should be named so as to be patched last
                     New-Item $filepath -type directory -force | Out-Null
                 }
-                elseif ($sitecoreVersion -eq 8.1)
+                elseif ($sitecoreVersion -gt 8.0)
                 {
-                    # Get 8.1's built-in folder
+                    # Get built-in folder
                     $folderPath = Join-Path (Split-Path $file) -ChildPath "Z.SwitchMasterToWeb"
                     $filepath = $folderPath
 
                     $newFolderName = $script:configSettings.WebServer.LastChildFolderOfIncludeDirectory
                     if (!([string]::IsNullOrEmpty($newFolderName)))
                     {
-                        # Change name of 8.1's built-in folder to LastChildFolderOfIncludeDirectory
+                        # Change name of built-in folder to LastChildFolderOfIncludeDirectory
                         $folderItem = Rename-Item $folderPath $newFolderName -PassThru
                         $filepath = $folderItem.FullName
                     }
