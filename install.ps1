@@ -148,20 +148,38 @@ function Get-SqlServerSmo
     return $sqlServerSmo
 }
 
-function Get-DatabaseInstallFolderPath([bool]$localPath=$TRUE)
+function Get-DatabaseInstallFolderPath
 {
-    if ($localPath)
+    [CmdletBinding()]
+    param
+    (
+        [parameter(Position=0, Mandatory=$true)]
+        [ValidateSet("DataFiles", "LogFiles")]
+        [string]$FileType,
+        [parameter(Mandatory=$false)]
+        [switch]$LocalPath
+    )
+    process
     {
-        return $script:configSettings.Database.DatabaseInstallPath.Local
-    }
+        $dbFilePath = $script:configSettings.Database.DatabaseInstallPath.DataFiles
+        if($FileType -eq "LogFiles")
+        {
+            $dbFilePath = $script:configSettings.Database.DatabaseInstallPath.LogFiles
+        }
 
-    # Return the Local path if the Unc path does not exist
-    if ([string]::IsNullOrEmpty($script:configSettings.Database.DatabaseInstallPath.Unc))
-    {
-        return $script:configSettings.Database.DatabaseInstallPath.Local
-    }
+        if ($LocalPath)
+        {
+            return $dbFilePath.Local
+        }
 
-    return $script:configSettings.Database.DatabaseInstallPath.Unc
+        # Return the Local path if the Unc path does not exist
+        if ([string]::IsNullOrEmpty($dbFilePath.Unc))
+        {
+            return $dbFilePath.Local
+        }
+
+        return $dbFilePath.Unc
+    }
 }
 
 function Find-FolderInZipFile($items, [string]$folderName)
@@ -304,8 +322,7 @@ function Get-SitecoreConfigurationFiles
         [string]$ConfigFilter
     )
     process
-    {
-        
+    {        
         $files = @()
 
         $roleName = "Content Management (CM)"
@@ -356,6 +373,12 @@ function Add-CalculatedPropertiesToConfigurationSettings
 
     # ConfigurationFilesCsvPath
     $script:configSettings | Add-Member -MemberType NoteProperty -Name ConfigurationFilesCsvPath -Value (Join-Path $script:configSettings.WebServer.SitecoreInstallPath -ChildPath "configFiles.csv")
+
+    if ($script:configSettings.Database.DatabaseInstallPath.LogFiles.Local -eq $null)
+    {
+       $script:configSettings.Database.DatabaseInstallPath.LogFiles.Local = $script:configSettings.Database.DatabaseInstallPath.DataFiles.Local 
+       $script:configSettings.Database.DatabaseInstallPath.LogFiles.Unc = $script:configSettings.Database.DatabaseInstallPath.DataFiles.unc 
+    }
 }
 
 function New-ConfigSettings([xml]$config)
@@ -679,19 +702,36 @@ function New-ConfigSettings([xml]$config)
     #region DatabaseInstallPath
     $databaseInstallPath = New-Object -TypeName PSObject
 
-    $local = $config.InstallSettings.Database.DatabaseInstallPath.Local
+    $dataFiles = New-Object -TypeName PSObject
+    $local = $config.InstallSettings.Database.DatabaseInstallPath.DataFiles.Local
     if (!([string]::IsNullOrEmpty($local)))
     {
         $local = $local.Trim()
     }
-    $unc = $config.InstallSettings.Database.DatabaseInstallPath.Unc
+    $unc = $config.InstallSettings.Database.DatabaseInstallPath.DataFiles.Unc
     if (!([string]::IsNullOrEmpty($unc)))
     {
         $unc = $unc.Trim()
     }
+    $dataFiles | Add-Member -MemberType NoteProperty -Name Local -Value $local
+    $dataFiles | Add-Member -MemberType NoteProperty -Name Unc -Value $unc
 
-    $databaseInstallPath | Add-Member -MemberType NoteProperty -Name Local -Value $local
-    $databaseInstallPath | Add-Member -MemberType NoteProperty -Name Unc -Value $unc
+    $logFiles = New-Object -TypeName PSObject
+    $local = $config.InstallSettings.Database.DatabaseInstallPath.LogFiles.Local
+    if (!([string]::IsNullOrEmpty($local)))
+    {
+        $local = $local.Trim()
+    }
+    $unc = $config.InstallSettings.Database.DatabaseInstallPath.LogFiles.Unc
+    if (!([string]::IsNullOrEmpty($unc)))
+    {
+        $unc = $unc.Trim()
+    }
+    $logFiles | Add-Member -MemberType NoteProperty -Name Local -Value $local
+    $logFiles | Add-Member -MemberType NoteProperty -Name Unc -Value $unc
+
+    $databaseInstallPath | Add-Member -MemberType NoteProperty -Name DataFiles -Value $datafiles
+    $databaseInstallPath | Add-Member -MemberType NoteProperty -Name LogFiles -Value $logfiles
     #endregion
 
     $database = New-Object -TypeName PSObject
@@ -898,50 +938,114 @@ function Test-SqlConnectionAndRoles
     }
 }
 
-function Test-SqlInstallPath
+function Test-SqlPermissionForPath([string]$path)
 {
-    # Check that path exists
-    $dbInstallPath = Get-DatabaseInstallFolderPath $FALSE
-    if (Test-Path $dbInstallPath)
+    # Check that SQL has correct rights over install path, else Database Attach will fail
+    [Microsoft.SqlServer.Management.Smo.Server]$sqlServerSmo = Get-SqlServerSmo        
+    $user = $sqlServerSmo.SqlDomainGroup
+    $acl = Get-Acl $path
+    $isCorrectRights = $acl.Access | Where {($_.IdentityReference -eq $user) -and ($_.FileSystemRights -eq "FullControl")}
+    if($isCorrectRights)
     {
-        # Check that SQL has correct rights over install path, else Database Attach will fail
-        [Microsoft.SqlServer.Management.Smo.Server]$sqlServerSmo = Get-SqlServerSmo        
-        $user = $sqlServerSmo.SqlDomainGroup
-        $acl = Get-Acl $dbInstallPath
-        $isCorrectRights = $acl.Access | Where {($_.IdentityReference -eq $user) -and ($_.FileSystemRights -eq "FullControl")}
-        if($isCorrectRights)
+        return $TRUE
+    }  
+    else
+    {
+        Write-Message "SQL doesn't appear to have enough rights for the install path." "Yellow" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+        Write-Message "This might be because SQL is using builtin virtual service accounts, which are local accounts that exist on a different server than the Sitecore server. If this is true, you may IGNORE this message." "Yellow" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+        Write-Message "Ensure that the SQL service for your SQL instance has FullControl of $path" "Yellow" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+        Write-Message "Failure to do so will PREVENT the databases from attaching.`n" "Yellow" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+
+        if ($script:configSettings.SuppressPrompts)
         {
             return $TRUE
-        }  
+        }
         else
         {
-            Write-Message "SQL doesn't appear to have enough rights for the install path." "Yellow" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
-            Write-Message "This might be because SQL is using builtin virtual service accounts, which are local accounts that exist on a different server than the Sitecore server. If this is true, you may IGNORE this message." "Yellow" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
-            Write-Message "Ensure that the SQL service for your SQL instance has FullControl of $dbInstallPath" "Yellow" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
-            Write-Message "Failure to do so will PREVENT the databases from attaching.`n" "Yellow" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
-
-            if ($script:configSettings.SuppressPrompts)
+            $shell = new-object -comobject "WScript.Shell"
+            $result = $shell.popup("Do you wish to proceed?",0,"Question",4+32)
+            # $result will be 6 for yes, 7 for no.
+            if ($result -eq 6)
             {
                 return $TRUE
             }
-            else
-            {
-                $shell = new-object -comobject "WScript.Shell"
-                $result = $shell.popup("Do you wish to proceed?",0,"Question",4+32)
-                # $result will be 6 for yes, 7 for no.
-                if ($result -eq 6)
+        }
+    }
+
+    return $FALSE
+}
+
+function Test-ScriptPermissionForPath([string]$path)
+{
+    $uri = New-Object System.Uri($path)
+    $split = $path.Split('\')
+    $computer = $uri.host
+    $share = $split[$split.Count-1]
+    $scriptIdentity = [Security.Principal.WindowsIdentity]::GetCurrent().Name
+
+    try
+    {
+        $sharedSecurity = Get-WMIObject -Class Win32_LogicalShareSecuritySetting -Filter "name='$share'"  -ComputerName $computer
+        $secdesc = $sharedSecurity.GetSecurityDescriptor().Descriptor
+        foreach($ace in $secdesc.DACL)
+        {
+            $userName = $ace.Trustee.Name
+            If ($ace.Trustee.Domain -ne $Null) {$userName = "$($ace.Trustee.Domain)\$UserName"}
+            If ($ace.Trustee.Name -eq $Null) {$userName = $ace.Trustee.SIDString }
+            if ($userName -ne $scriptIdentity) { continue }
+
+            [Array]$accessRules += New-Object Security.AccessControl.FileSystemAccessRule($UserName, $ace.AccessMask, $ace.AceType)
+            foreach($rule in $accessRules)
+            {                
+                if ($rule.AccessControlType -eq [System.Security.AccessControl.AccessControlType]::Allow)
                 {
-                    return $TRUE
+                    if (($rule.FileSystemRights -band [System.Security.AccessControl.FileSystemRights]::Modify) -eq [System.Security.AccessControl.FileSystemRights]::Modify)
+                    {
+                        return $TRUE
+                    }
                 }
             }
         }
     }
-    else
+    catch
     {
-        Write-Message "Path does not exist: $dbInstallPath" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+        Write-Message "Unable to obtain permissions for $share" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+        return $FALSE
     }
 
+
+    Write-Message "The script identity [$scriptIdentity] doesn't have 'Modify' rights for the UNC path [$path]" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
     return $FALSE
+}
+
+function Test-SqlInstallPaths
+{
+    $installPaths = New-Object 'System.Collections.Generic.List[string]'
+    $installPaths.Add((Get-DatabaseInstallFolderPath -FileType DataFiles))
+    $installPaths.Add((Get-DatabaseInstallFolderPath -FileType LogFiles))
+
+    if ($installPaths[1].Length -eq 0)
+    {
+        $installPaths.RemoveAt(1)
+    }
+
+    $testResult = $TRUE
+    foreach ($path in $installPaths)
+    {
+        if (!(Test-SqlPermissionForPath $path))
+        {
+            $testResult = $FALSE
+            break
+        }
+
+        if (!(Test-ScriptPermissionForPath $path))
+        {
+            $testResult = $FALSE
+            break
+        }
+    }
+
+    return $testResult
 }
 
 function Test-WebDatabseCopyNames
@@ -1330,13 +1434,14 @@ function Test-ConfigurationSettings
 
         if ($script:configSettings.Database.InstallDatabase)
         {
-            if ([string]::IsNullOrEmpty($script:configSettings.Database.DatabaseInstallPath.Local))
+            if ([string]::IsNullOrEmpty($script:configSettings.Database.DatabaseInstallPath.DataFiles.Local))
             {
                 Write-Message "DatabaseInstallPath.Local cannot be null or empty" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
                 return $FALSE
             }
-    
-            if (!(Test-SqlInstallPath))
+
+
+            if (!(Test-SqlInstallPaths))
             {
                 Write-Message "DatabaseInstallPath is not valid." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
                 return $FALSE
@@ -1457,15 +1562,11 @@ function Test-ConfigurationSettings
 #region Main Body
 function Copy-DatabaseFiles([string]$zipPath)
 {
-    $dbFolderPath = Get-DatabaseInstallFolderPath $FALSE
+    $dataFilesFolderPath = Get-DatabaseInstallFolderPath -FileType DataFiles
+    $logFilesFolderPath = Get-DatabaseInstallFolderPath -FileType LogFiles
 
-    Write-Message "Extracting database files from $zipPath to $dbFolderPath" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
-
-    if (!(Test-Path $dbFolderPath))
-    {
-        # Create Database directory
-        New-Item $dbFolderPath -type directory -force | Out-Null
-    }
+    Write-Message "Extracting database data files from $zipPath to $dataFilesFolderPath" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+    Write-Message "Extracting database log files from $zipPath to $logFilesFolderPath" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
 
     $shell = New-Object -com shell.application
     $item = Find-FolderInZipFile $shell.NameSpace($zipPath).Items() "Databases"
@@ -1487,7 +1588,13 @@ function Copy-DatabaseFiles([string]$zipPath)
             $fileName = $childItemName
         }
         
-        $filePath = Join-Path $dbFolderPath -ChildPath $fileName
+        $destinationFolderPath = $dataFilesFolderPath
+        if ($childItemName.EndsWith(".ldf"))
+        {
+            $destinationFolderPath = $logFilesFolderPath
+        }
+
+        $filePath = Join-Path $destinationFolderPath -ChildPath $fileName
 
         if (Test-Path $filePath)
         {
@@ -1495,14 +1602,14 @@ function Copy-DatabaseFiles([string]$zipPath)
         }
         else
         {
-            $shell.NameSpace($dbFolderPath).CopyHere($childItem)
+            $shell.NameSpace($destinationFolderPath).CopyHere($childItem)
 
             if ($childItemName.ToLower() -like "sitecore.web.*")
             {
                 # Make copies of the web Database as required
                 foreach ($copy in $script:configSettings.Database.WebDatabaseCopies)
                 {
-                    $copyFilePath = Join-Path $dbFolderPath -ChildPath (Get-SubstituteDatabaseFileName $childItemName $copy.Name)
+                    $copyFilePath = Join-Path $destinationFolderPath -ChildPath (Get-SubstituteDatabaseFileName $childItemName $copy.Name)
                     Copy-Item $filePath $copyFilePath
                 }
             }
@@ -1510,7 +1617,7 @@ function Copy-DatabaseFiles([string]$zipPath)
             # Rename Analytics database files to Reporting
             if ($childItemName.ToLower() -like "sitecore.analytics.*")
             {
-                Rename-Item "$dbFolderPath\$($childItemName)" (Get-SubstituteDatabaseFileName $childItemName "Reporting")
+                Rename-Item "$destinationFolderPath\$($childItemName)" (Get-SubstituteDatabaseFileName $childItemName "Reporting")
             }
         }
     }
@@ -1600,10 +1707,11 @@ function Attach-SitecoreDatabase([string]$databaseName, [Microsoft.SqlServer.Man
         Write-Message $message "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
 
         # Get paths of the data and log file
-        $dbFolderPath = Get-DatabaseInstallFolderPath $TRUE
+        $dataFilesFolderPath = Get-DatabaseInstallFolderPath -FileType DataFiles -LocalPath
+        $logFilesFolderPath = Get-DatabaseInstallFolderPath -FileType LogFiles -LocalPath
 
-        $dataFilePath = Join-Path $dbFolderPath -ChildPath "Sitecore.$databaseName.mdf"
-        $logFilePath = Join-Path $dbFolderPath -ChildPath "Sitecore.$databaseName.ldf"
+        $dataFilePath = Join-Path $dataFilesFolderPath -ChildPath "Sitecore.$databaseName.mdf"
+        $logFilePath = Join-Path $logFilesFolderPath -ChildPath "Sitecore.$databaseName.ldf"
 		
         $files = New-Object System.Collections.Specialized.StringCollection 
         $files.Add($dataFilePath) | Out-Null
