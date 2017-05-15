@@ -1711,7 +1711,7 @@ function Attach-SitecoreDatabase([string]$databaseName, [Microsoft.SqlServer.Man
         $logFilesFolderPath = Get-DatabaseInstallFolderPath -FileType LogFiles -LocalPath
 
         $dataFilePath = Join-Path $dataFilesFolderPath -ChildPath "Sitecore.$databaseName.mdf"
-        $logFilePath = Join-Path $logFilesFolderPath -ChildPath "Sitecore.$databaseName.ldf"
+        $logFilePath = [IO.Path]::Combine( $logFilesFolderPath, "Sitecore.$databaseName.ldf" )
 		
         $files = New-Object System.Collections.Specialized.StringCollection 
         $files.Add($dataFilePath) | Out-Null
