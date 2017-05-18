@@ -1,5 +1,5 @@
 # Specify a path to the .config file if you do not wish to put the .config file in the same directory as the script
-$configPath = "C:\Projects\PowerShellScripts\SitecoreInstaller\myinstall.PROC.config"
+$configPath = ""
 $scriptDir = Split-Path (Resolve-Path $myInvocation.MyCommand.Path)
 $configSettings = $null
 # Assume there is no host console available until we can read the config file.
