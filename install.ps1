@@ -182,6 +182,11 @@ function Get-DatabaseInstallFolderPath
     }
 }
 
+function Get-AspNetRegIisPath
+{
+    return (Join-Path $env:windir -ChildPath "Microsoft.NET\Framework64\v4.0.30319\aspnet_regiis.exe")
+}
+
 function Find-FolderInZipFile($items, [string]$folderName)
 {
     foreach($item in $items)
@@ -665,6 +670,7 @@ function New-ConfigSettings([xml]$config)
     $webserver | Add-Member -MemberType NoteProperty -Name SitecoreInstanceName -Value $sitecoreInstanceName
     $webserver | Add-Member -MemberType NoteProperty -Name ReportingApiKey -Value $reportingApiKey
     $webserver | Add-Member -MemberType NoteProperty -Name LastChildFolderOfIncludeDirectory -Value $lastChildFolderOfIncludeDirectory
+    $webserver | Add-Member -MemberType NoteProperty -Name EncryptConnectionStrings -Value (Get-ConfigOption $config "WebServer/EncryptConnectionStrings")
     $webserver | Add-Member -MemberType NoteProperty -Name IISWebSiteName -Value $iisWebSiteName
     $webserver | Add-Member -MemberType NoteProperty -Name DefaultRuntimeVersion -Value $defaultRuntimeVersion
     $webserver | Add-Member -MemberType NoteProperty -Name AppPoolIdentity -Value $appPoolIdentity
@@ -1347,6 +1353,12 @@ function Test-ConfigurationSettings
     if ([string]::IsNullOrEmpty($script:configSettings.WebServer.SitecoreInstallFolder))
     {
         Write-Message "SitecoreInstallFolder cannot be null or empty" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+        return $FALSE
+    }
+
+    if ($script:configSettings.WebServer.EncryptConnectionStrings -and (!(Test-Path (Get-AspNetRegIisPath))))
+    {
+        Write-Message "Couldn't find aspnet_regiis executable, which is required for encrypting connection strings" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
         return $FALSE
     }
 
@@ -3139,6 +3151,14 @@ function Revoke-ExecutePermission([string]$iisSiteName, [string]$folderPath)
     Set-WebConfigurationProperty /system.WebServer/handlers "IIS:\sites\$iisSiteName\$folderPath" -Name accessPolicy -value "Read"
 }
 
+function Protect-ConnectionStrings
+{
+    Write-Message "Encrypting the contents of ConnectionString.config." "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+    $webrootPath = Join-Path $script:configSettings.WebServer.SitecoreInstallPath -ChildPath "Website"
+    $args = "-pef connectionStrings " + $webrootPath
+    Start-Process -FilePath (Get-AspNetRegIisPath) -ArgumentList $args
+}
+
 function Set-SecuritySettings([string]$iisSiteName)
 {
     Write-Message "`nApplying recommended security settings..." "Green" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
@@ -3147,6 +3167,11 @@ function Set-SecuritySettings([string]$iisSiteName)
 
     Add-AppPoolIdentityToLocalGroup "IIS_IUSRS" $iisSiteName
     Add-AppPoolIdentityToLocalGroup "Performance Monitor Users" $iisSiteName
+
+    if ($script:configSettings.WebServer.EncryptConnectionStrings)
+    {
+        Protect-ConnectionStrings
+    }
 
     if ($script:configSettings.WebServer.CDServerSettings.Enabled)
     {
