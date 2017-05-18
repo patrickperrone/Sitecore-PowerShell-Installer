@@ -1,5 +1,5 @@
 # Specify a path to the .config file if you do not wish to put the .config file in the same directory as the script
-$configPath = "C:\Projects\PowerShellScripts\SitecoreInstaller\myinstall.PROC.config"
+$configPath = ""
 $scriptDir = Split-Path (Resolve-Path $myInvocation.MyCommand.Path)
 $configSettings = $null
 # Assume there is no host console available until we can read the config file.
@@ -514,6 +514,7 @@ function New-ConfigSettings([xml]$config)
     $cdServerSettings | Add-Member -MemberType NoteProperty -Name DisableUploadWatcher -Value (Get-ConfigOption $config "WebServer/CDServerSettings/DisableUploadWatcher")
     $cdServerSettings | Add-Member -MemberType NoteProperty -Name DisableExperienceAnalyticsAssemblies -Value (Get-ConfigOption $config "WebServer/CDServerSettings/DisableExperienceAnalyticsAssemblies")
     $cdServerSettings | Add-Member -MemberType NoteProperty -Name DisableSitecoreVersionPage -Value (Get-ConfigOption $config "WebServer/CDServerSettings/DisableSitecoreVersionPage")
+    $cdServerSettings | Add-Member -MemberType NoteProperty -Name RemovePhantomJs -Value (Get-ConfigOption $config "WebServer/CDServerSettings/RemovePhantomJs")
     #endregion
 
     #region IPWhiteList
@@ -3139,6 +3140,32 @@ function Revoke-ExecutePermission([string]$iisSiteName, [string]$folderPath)
     Set-WebConfigurationProperty /system.WebServer/handlers "IIS:\sites\$iisSiteName\$folderPath" -Name accessPolicy -value "Read"
 }
 
+function Remove-PhantomJs
+{
+    # remove phantomjs directory
+    $phantomJsFolder = "Data\tools\phantomjs"
+    $phantomJsPath = Join-Path $script:configSettings.WebServer.SitecoreInstallPath -ChildPath $phantomJsFolder
+    if(Test-Path $phantomJsPath)
+    {
+        Get-ChildItem -Path $phantomJsPath -Recurse | Remove-Item -Force
+        Remove-Item -Path $phantomJsPath
+        Write-Message "Removed PhantomJs directory " "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+    }
+    
+    # remove getScreenshotUrl pipeline
+    $contentTestingConfig = "Website/App_Config/Include/ContentTesting/Sitecore.ContentTesting.config"
+    $contentTestingConfigPath = Join-Path $script:configSettings.WebServer.SitecoreInstallPath -ChildPath $contentTestingConfig
+    $contentTestingConfig = [xml](Get-Content $contentTestingConfigPath)
+    $currentDate = (Get-Date).ToString("yyyyMMdd_hh-mm-s")
+    $backupContentTesting = $contentTestingConfigPath + "__$currentDate"
+    $contentTestingConfig.Save($backupContentTesting)
+    $node = $contentTestingConfig.configuration.sitecore.pipelines.getScreenshotForUrl
+    $contentTestingConfig.configuration.sitecore.pipelines.RemoveChild($node)
+    $contentTestingConfig.Save($contentTestingConfigPath)
+    Remove-Item -Path $backupContentTesting
+    Write-Message "Removed getScreenshotForUrl pipeline" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+}
+
 function Set-SecuritySettings([string]$iisSiteName)
 {
     Write-Message "`nApplying recommended security settings..." "Green" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
@@ -3165,6 +3192,12 @@ function Set-SecuritySettings([string]$iisSiteName)
             Revoke-ExecutePermission $iisSiteName "temp"
             Revoke-ExecutePermission $iisSiteName "upload"
         }
+
+        if ($script:configSettings.WebServer.CDServerSettings.RemovePhantomJs)
+        {
+            Remove-PhantomJs
+        }
+        
     }
 
     if (Test-ProcessingServerRole)
