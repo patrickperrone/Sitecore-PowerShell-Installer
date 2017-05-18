@@ -1,5 +1,5 @@
 # Specify a path to the .config file if you do not wish to put the .config file in the same directory as the script
-$configPath = ""
+$configPath = "C:\Projects\PowerShellScripts\SitecoreInstaller\myinstall.PROC.config"
 $scriptDir = Split-Path (Resolve-Path $myInvocation.MyCommand.Path)
 $configSettings = $null
 # Assume there is no host console available until we can read the config file.
@@ -197,42 +197,53 @@ function Find-FolderInZipFile($items, [string]$folderName)
     } 
 }
 
-function Get-SitecoreVersion([bool]$getFromZip=$FALSE, [bool]$getFullVersion=$FALSE)
+function Get-SitecoreVersion
 {
-    # Returns the version of the Sitecore.Kernel.dll
-    $installPath = Join-Path $script:configSettings.WebServer.SitecoreInstallRoot -ChildPath $script:configSettings.WebServer.SitecoreInstallFolder
-    $webrootPath = Join-Path $installPath -ChildPath "Website"
-    $kernelPath = Join-Path $webrootPath -ChildPath "bin\Sitecore.Kernel.dll"
-
-    if ($getFromZip)
+    [CmdletBinding()]
+    param
+    (
+        [parameter(Position=0)]
+        [switch]$GetFromZip,
+        [parameter(Position=1)]
+        [switch]$GetFullVersion
+    )
+    process
     {
-        if (!(Test-Path $installPath))
+        # Returns the version of the Sitecore.Kernel.dll
+        $installPath = Join-Path $script:configSettings.WebServer.SitecoreInstallRoot -ChildPath $script:configSettings.WebServer.SitecoreInstallFolder
+        $webrootPath = Join-Path $installPath -ChildPath "Website"
+        $kernelPath = Join-Path $webrootPath -ChildPath "bin\Sitecore.Kernel.dll"
+
+        if ($GetFromZip)
         {
-            New-Item $installPath -type directory -force | Out-Null
+            if (!(Test-Path $installPath))
+            {
+                New-Item $installPath -type directory -force | Out-Null
+            }
+
+            $zipPath = $script:configSettings.SitecoreZipPath
+            $shell = New-Object -com shell.application
+            $item = Find-FolderInZipFile $shell.NameSpace($zipPath).Items() "bin"
+            $kernelItem = $shell.NameSpace($item.Path).Items() | Where {$_.Name -match "Sitecore.Kernel.dll"}
+            $shell.NameSpace($installPath).CopyHere($kernelItem) | Out-Null
+            $path = Join-Path $installPath -ChildPath $kernelItem.Name
+            $fullVersion = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($path).FileVersion
+            Remove-Item $path
+        }
+        else
+        {
+            $fullVersion = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($kernelPath).FileVersion
         }
 
-        $zipPath = $script:configSettings.SitecoreZipPath
-        $shell = New-Object -com shell.application
-        $item = Find-FolderInZipFile $shell.NameSpace($zipPath).Items() "bin"
-        $kernelItem = $shell.NameSpace($item.Path).Items() | Where {$_.Name -match "Sitecore.Kernel.dll"}
-        $shell.NameSpace($installPath).CopyHere($kernelItem)
-        $path = Join-Path $installPath -ChildPath $kernelItem.Name
-        $fullVersion = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($path).FileVersion
-        Remove-Item $path
-    }
-    else
-    {
-        $fullVersion = [System.Diagnostics.FileVersionInfo]::GetVersionInfo($kernelPath).FileVersion
-    }
+        $versionInfo = $fullVersion
+        if (!$GetFullVersion)
+        {
+            $verArr = $fullVersion.Split(".")
+            $versionInfo = "{0}.{1}" -f $verArr[0],$verArr[1]
+        }
 
-    $versionInfo = $fullVersion
-    if (!$getFullVersion)
-    {
-        $verArr = $fullVersion.Split("{.}")
-        $versionInfo = "{0}.{1}" -f $verArr[0],$verArr[1]
+        return $versionInfo
     }
-
-    return $versionInfo
 }
 
 function Get-BaseConnectionString
@@ -315,20 +326,24 @@ function Get-SitecoreConfigurationFiles
     param
     (
         [parameter(Position=0, Mandatory=$true)]
-        [ValidateSet("CM", "CD")]
+        [ValidateSet("CM", "CD", "Processing")]
         [string]$ServerRole,
         [parameter(Position=1, Mandatory=$true)]
         [ValidateSet("Enable", "Disable")]
         [string]$ConfigFilter
     )
     process
-    {        
+    {
         $files = @()
 
         $roleName = "Content Management (CM)"
         if ($ServerRole -eq "CD")
         {
             $roleName = "Content Delivery (CD)"
+        }
+        elseif ($ServerRole -eq "Processing")
+        {
+            $roleName = "Processing"
         }
 
         Import-Csv $script:configSettings.ConfigurationFilesCsvPath `
@@ -337,6 +352,7 @@ function Get-SitecoreConfigurationFiles
                 $_.$($roleName).Trim() -eq $ConfigFilter `
                 -and !($_.'Search Provider Used'.Contains("Solr")) `
                 -and !($_.'Search Provider Used'.Contains("Azure")) `
+                -and !($_.'Config file name'.Trim().EndsWith(".Oracle")) `
             } `
         | ForEach-Object `
             {
@@ -352,6 +368,18 @@ function Get-SitecoreConfigurationFiles
 
         return $files
     }
+}
+
+function Remove-ChildXmlComments([System.XML.XMLElement]$node)
+{
+    foreach($child in $node.ChildNodes)
+    {
+        if ($child.NodeType -eq [System.Xml.XmlNodeType]::Comment)
+        {
+            $child.ParentNode.RemoveChild($child) | Out-Null
+        }
+    }
+    return $node
 }
 
 function Add-CalculatedPropertiesToConfigurationSettings
@@ -456,6 +484,13 @@ function New-ConfigSettings([xml]$config)
     $publishing | Add-Member -MemberType NoteProperty -Name DisableScheduledTaskExecution -Value (Get-ConfigOption $config "WebServer/CMServerSettings/Publishing/DisableScheduledTaskExecution")
     $publishing | Add-Member -MemberType NoteProperty -Name Parallel -Value $parallel
 
+    $processing = New-Object -TypeName PSObject
+    $processing | Add-Member -MemberType NoteProperty -Name Enabled -Value (Get-ConfigOption $config "WebServer/CMServerSettings/Processing/enabled" $TRUE)
+    $processing | Add-Member -MemberType NoteProperty -Name ApplyIPWhitelist -Value (Get-ConfigOption $config "WebServer/CMServerSettings/Processing/ApplyIPWhitelist")
+    $processing | Add-Member -MemberType NoteProperty -Name DeactivateConnectionStrings -Value (Get-ConfigOption $config "WebServer/CMServerSettings/Processing/DeactivateConnectionStrings")
+    $processing | Add-Member -MemberType NoteProperty -Name ConfigureFilesForProcessing -Value (Get-ConfigOption $config "WebServer/CMServerSettings/Processing/ConfigureFilesForProcessing")
+    $processing | Add-Member -MemberType NoteProperty -Name PreventAnonymousAccess -Value (Get-ConfigOption $config "WebServer/CMServerSettings/Processing/PreventAnonymousAccess")
+
     $cmServerSettings = New-Object -TypeName PSObject
     $adminPassword = $config.InstallSettings.WebServer.CMServerSettings.DefaultSitecoreAdminPassword
     if (!([string]::IsNullOrEmpty($adminPassword)))
@@ -465,6 +500,7 @@ function New-ConfigSettings([xml]$config)
     $cmServerSettings | Add-Member -MemberType NoteProperty -Name Enabled -Value (Get-ConfigOption $config "WebServer/CMServerSettings/enabled" $TRUE)
     $cmServerSettings | Add-Member -MemberType NoteProperty -Name DefaultSitecoreAdminPassword -Value $adminPassword
     $cmServerSettings | Add-Member -MemberType NoteProperty -Name Publishing -Value $publishing
+    $cmServerSettings | Add-Member -MemberType NoteProperty -Name Processing -Value $processing
     #endregion
 
     #region CDServerSettings
@@ -864,7 +900,7 @@ function Test-PreRequisites
         return $FALSE
     }
 
-    $versionToInstall = Get-SitecoreVersion $TRUE
+    $versionToInstall = Get-SitecoreVersion -GetFromZip
     if ($versionToInstall -eq "10.0")
     {
         $moduleName = "ImportExcel"
@@ -1114,9 +1150,18 @@ function Test-PublishingServerRole
     return $FALSE
 }
 
+function Test-ProcessingServerRole
+{
+    if ($script:configSettings.WebServer.CMServerSettings.Enabled)
+    {    
+        return ($script:configSettings.WebServer.CMServerSettings.Processing.Enabled)            
+    }
+    return $FALSE
+}
+
 function Test-SupportedSitecoreVersion
 {
-    $versionToInstall = Get-SitecoreVersion $TRUE
+    $versionToInstall = Get-SitecoreVersion -GetFromZip
 
     if ($versionToInstall -eq "8.0" `
     -or $versionToInstall -eq "8.1" `
@@ -1252,8 +1297,8 @@ function Test-ConfigurationSettings
         }
     }
 
-    $versionToInstall = Get-SitecoreVersion $TRUE
-    if ($versionToInstall -eq "10.0")
+    [decimal]$versionToInstall = Get-SitecoreVersion -GetFromZip
+    if ($versionToInstall -ge 10.0)
     {
         if ([string]::IsNullOrEmpty($script:configSettings.SitecoreConfigSpreadsheetPath))
         {
@@ -1507,6 +1552,12 @@ function Test-ConfigurationSettings
         }
     }
 
+    if (Test-PublishingServerRole -and Test-ProcessingServerRole)
+    {
+            Write-Message "Prublishing and Processing are both enabled. The Sitecore instance cannot be a dedicated publishing and processing server at the same time." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+            return $FALSE
+    }
+
     if (Test-PublishingServerRole)
     {
         if ([string]::IsNullOrEmpty($script:configSettings.WebServer.CMServerSettings.Publishing.PublishingInstance))
@@ -1551,6 +1602,15 @@ function Test-ConfigurationSettings
         else
         {
             Write-Message "AppPoolIdleTimeout must be an integer." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+            return $FALSE
+        }
+    }
+
+    if (Test-ProcessingServerRole)
+    {
+        if ($versionToInstall -lt 10.0)
+        {
+            Write-Message "Script does not support installing a Processing server for this version of Sitecore." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
             return $FALSE
         }
     }
@@ -2175,113 +2235,6 @@ function Get-FilesToDisableOnCDServer
                    "App_Config\Include\Social\Sitecore.Social.Solr.IndexConfiguration.config"
                    )
 
-    # Based on https://doc.sitecore.net/sitecore_experience_platform/xdb_configuration/configure_a_content_delivery_server
-    $filesFor82 = @(
-                   # SPEAK
-                   "App_Config\Include\001.Sitecore.Speak.Important.config",
-                   "App_Config\Include\Sitecore.Speak.AntiCsrf.SheerUI.config",
-                   "App_Config\Include\Sitecore.Speak.Applications.config",
-                   "App_Config\Include\Sitecore.Speak.Components.AntiCsrf.config",
-                   "App_Config\Include\Sitecore.Speak.Components.Mvc.config",
-                   "App_Config\Include\Sitecore.Speak.Components.config",
-                   "App_Config\Include\Sitecore.Speak.config",
-                   "App_Config\Include\Sitecore.Speak.ItemWebApi.config",
-                   "App_Config\Include\Sitecore.Speak.LaunchPad.config",
-
-                   # Platform
-                   "App_Config\Include\Sitecore.WebDAV.config",
-                   "App_Config\Include\Sitecore.Processing.config",
-
-                   # Marketing Foundation
-                   "App_Config\Include\Sitecore.Analytics.Automation.TimeoutProcessing.config",
-                   "App_Config\Include\Sitecore.Analytics.Processing.Aggregation.config",
-                   "App_Config\Include\Sitecore.Analytics.Processing.Aggregation.Services.config",
-                   "App_Config\Include\Sitecore.Analytics.Processing.config",
-                   "App_Config\Include\Sitecore.Analytics.Processing.Services.config",
-                   "App_Config\Include\Sitecore.Analytics.Reporting.config",
-                   "App_Config\Include\Sitecore.Marketing.Client.config",
-                   "App_Config\Include\Sitecore.Shell.MarketingAutomation.config",
-                   "App_Config\Include\Sitecore.EngagementAutomation.Processing.Aggregation.config",
-                   "App_Config\Include\Sitecore.EngagementAutomation.Processing.Aggregation.Services.config",
-                   "App_Config\Include\Sitecore.EngagementAutomation.Processing.config",
-                   "App_Config\Include\Sitecore.EngagementAutomation.TimeoutProcessing.config",                   
-
-                   # Path Analyzer
-                   "App_Config\Include\Sitecore.PathAnalyzer.Client.config",
-                   "App_Config\Include\Sitecore.PathAnalyzer.config",
-                   "App_Config\Include\Sitecore.PathAnalyzer.Processing.config",
-                   "App_Config\Include\Sitecore.PathAnalyzer.Services.config",
-                   "App_Config\Include\Sitecore.PathAnalyzer.StorageProviders.config",
- 
-                   # Content Testing
-                   "App_Config\Include\ContentTesting\Sitecore.ContentTesting.Processing.Aggregation.config",
-                   "App_Config\Include\ContentTesting\Sitecore.ContentTesting.ApplicationDependencies.config",
-                   "App_Config\Include\ContentTesting\Sitecore.ContentTesting.Client.RulePerformance.config",
-
-                   # Experience Analytics
-                   "App_Config\Include\ContentTesting\Sitecore.ExperienceAnalytics.config",
-                   "App_Config\Include\ExperienceAnalytics\Sitecore.ExperienceAnalytics.Aggregation.config",
-                   "App_Config\Include\ExperienceAnalytics\Sitecore.ExperienceAnalytics.Client.config",
-                   "App_Config\Include\ExperienceAnalytics\Sitecore.ExperienceAnalytics.Reduce.config",
-                   "App_Config\Include\ExperienceAnalytics\Sitecore.ExperienceAnalytics.StorageProviders.config",
-                   "App_Config\Include\ExperienceAnalytics\Sitecore.ExperienceAnalytics.WebAPI.config",
-
-                   # Experience Profile
-                   "App_Config\Include\ExperienceProfile\Sitecore.ExperienceProfile.config",
-                   "App_Config\Include\ExperienceProfile\Sitecore.ExperienceProfile.Client.config",
-                   "App_Config\Include\ExperienceProfile\Sitecore.ExperienceProfile.Reporting.config",
-
-                   # FXM
-                   "App_Config\Include\FXM\Sitecore.FXM.Speak.config",
-
-                   # List Management
-                   "App_Config\Include\ListManagement\Sitecore.ListManagement.Client.config",
-                   "App_Config\Include\ListManagement\Sitecore.ListManagement.config",
-                   "App_Config\Include\ListManagement\Sitecore.ListManagement.Services.config",
-
-                   # Social Connected
-                   "App_Config\Include\Social\Sitecore.Social.ExperienceProfile.config",
-                   
-                   # Exec Insight Dashboard
-                   "\sitecore\shell\Applications\Reports\Dashboard\CampaignCategoryDefaultSettings.config",
-                   "\sitecore\shell\Applications\Reports\Dashboard\Configuration.config",
-                   "\sitecore\shell\Applications\Reports\Dashboard\DefaultSettings.config",
-                   "\sitecore\shell\Applications\Reports\Dashboard\SingleCampaignDefaultSettings.config",
-                   "\sitecore\shell\Applications\Reports\Dashboard\SingleTrafficTypeDefaultSettings.config",
-
-                   # Search-related configs, using Lucene as provider
-                   "App_Config\Include\Sitecore.ContentSearch.Lucene.Index.Master.config",
-                   "App_Config\Include\Sitecore.ContentSearch.Solr.DefaultIndexConfiguration.config",
-                   "App_Config\Include\Sitecore.ContentSearch.Solr.Index.Analytics.config",
-                   "App_Config\Include\Sitecore.ContentSearch.Solr.Index.Core.config",
-                   "App_Config\Include\Sitecore.ContentSearch.Solr.Index.Master.config",
-                   "App_Config\Include\Sitecore.ContentSearch.Solr.Index.Web.config",
-                   "App_Config\Include\Sitecore.Speak.ContentSearch.Lucene.config",
-                   "App_Config\Include\Sitecore.ContentTesting.Lucene.IndexConfiguration.config",
-                   "App_Config\Include\ContentTesting\Sitecore.ContentTesting.Lucene.IndexConfiguration.config",
-                   "App_Config\Include\Sitecore.Marketing.Definitions.MarketingAssets.Repositories.Lucene.Index.Master.config",
-                   "App_Config\Include\Sitecore.Marketing.Definitions.MarketingAssets.Repositories.Solr.Index.Master.config",
-                   "App_Config\Include\Sitecore.Marketing.Definitions.MarketingAssets.Repositories.Solr.Index.Web.config",
-                   "App_Config\Include\Sitecore.Marketing.Definitions.MarketingAssets.Repositories.Solr.IndexConfiguration.config",
-                   "App_Config\Include\Sitecore.Marketing.Lucene.Index.Master.config",
-                   "App_Config\Include\Sitecore.Marketing.Solr.Index.Master.config",
-                   "App_Config\Include\Sitecore.Marketing.Solr.Index.Web.config",
-                   "App_Config\Include\Sitecore.Marketing.Solr.IndexConfiguration.config",
-                   "App_Config\Include\FXM\Sitecore.FXM.Lucene.DomainsSearch.Index.Master.config",
-                   "App_Config\Include\FXM\Sitecore.FXM.Lucene.DomainsSearch.Index.Web.config",
-                   "App_Config\Include\FXM\Sitecore.FXM.Solr.DomainsSearch.DefaultIndexConfiguration.config",
-                   "App_Config\Include\FXM\Sitecore.FXM.Solr.DomainsSearch.Index.Master.config",
-                   "App_Config\Include\FXM\Sitecore.FXM.Solr.DomainsSearch.Index.Web.config",
-                   "App_Config\Include\ListManagement\Sitecore.ListManagement.Lucene.Index.List.config",
-                   "App_Config\Include\ListManagement\Sitecore.ListManagement.Lucene.IndexConfiguration.config",
-                   "App_Config\Include\ListManagement\Sitecore.ListManagement.Solr.Index.List.config",
-                   "App_Config\Include\ListManagement\Sitecore.ListManagement.Solr.IndexConfiguration.config",
-                   "App_Config\Include\Social\Sitecore.Social.Lucene.Index.Master.config",
-                   "App_Config\Include\Social\Sitecore.Social.Solr.Index.Master.config",
-                   "App_Config\Include\Social\Sitecore.Social.Solr.Index.Web.config",
-                   "App_Config\Include\Social\Sitecore.Social.Solr.IndexConfiguration.config"
-                   )
-
     [decimal]$sitecoreVersion = Get-SitecoreVersion
     if ($sitecoreVersion -eq "8.0")
     {        
@@ -2339,22 +2292,6 @@ function Get-FilesToEnableOnCDServer
                    "App_Config\Include\ScalabilitySettings.config",
                    "App_Config\Include\Sitecore.Analytics.MarketingTaxonomyCD.config",
                    "App_Config\Include\Sitecore.Marketing.config",
-                   "App_Config\Include\Sitecore.Marketing.Definitions.MarketingAssets.RepositoriesCD.config",
-                   "App_Config\Include\Sitecore.MarketingCD.config",
-                   "App_Config\Include\Z.SwitchMasterToWeb\SwitchMasterToWeb.config",
-
-                   # Social Connected
-                   "App_Config\Include\Social\Sitecore.Social.ScalabilitySettings.config"
-                   )
-
-    # Based on https://doc.sitecore.net/sitecore_experience_platform/xdb_configuration/configure_a_content_delivery_server
-    $filesFor82 = @(
-                   # Platform
-                   "App_Config\Include\CacheContainers.config",
-
-                   # Marketing Platform
-                   "App_Config\Include\ScalabilitySettings.config",
-                   "App_Config\Include\Sitecore.Analytics.MarketingTaxonomyCD.config",
                    "App_Config\Include\Sitecore.Marketing.Definitions.MarketingAssets.RepositoriesCD.config",
                    "App_Config\Include\Sitecore.MarketingCD.config",
                    "App_Config\Include\Z.SwitchMasterToWeb\SwitchMasterToWeb.config",
@@ -2561,6 +2498,59 @@ function Enable-FilesForPublishingServer
     }
 }
 
+function Get-FilesToDisableForProcessingServer
+{
+    return Get-SitecoreConfigurationFiles -ServerRole Processing -ConfigFilter Disable `
+    | % { Join-Path $script:configSettings.WebServer.SitecoreInstallPath -ChildPath $_ }
+}
+
+function Get-FilesToEnableForProcessingServer
+{
+    return Get-SitecoreConfigurationFiles -ServerRole Processing -ConfigFilter Enable `
+    | % { Join-Path $script:configSettings.WebServer.SitecoreInstallPath -ChildPath $_ }
+}
+
+function Disable-FilesForProcessingServer
+{
+    Write-Message "Disabling config files not needed on a Processing server." "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+    foreach ($file in Get-FilesToDisableForProcessingServer)
+    {
+        if (Test-Path $file)
+        {
+            $fileName = Split-Path $file -leaf
+            $newName = $fileName + ".disabled"
+            Rename-Item -Path $file -NewName $newName
+            Write-Message "Disabled: $file" "White" -WriteToLogOnly $TRUE -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        }
+        else
+        {
+            Write-Message "File not found on server: $file" "Yellow" -WriteToLogOnly $TRUE -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        }
+    }
+}
+
+function Enable-FilesForProcessingServer
+{
+    Write-Message "Enabling config files required by a Processing server." "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+    foreach ($fileToEnable in Get-FilesToEnableForProcessingServer)
+    {
+        if (Test-Path $fileToEnable)
+        {
+            # Do nothing, file is already enabled.
+        }
+        elseif (Test-Path ($fileToEnable + ".*"))
+        {
+            $match = Get-Item ($fileToEnable + ".*") | Select-Object -First 1
+            Copy-Item -Path $match -Destination $fileToEnable
+            Write-Message "Enabled: $fileToEnable" "White" -WriteToLogOnly $TRUE -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        }
+        else
+        {
+            Write-Message "File not found on server: $fileToEnable" "Yellow" -WriteToLogOnly $TRUE -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        }
+    }
+}
+
 function Set-ConfigurationFiles
 {
     Write-Message "`nWriting changes to config files..." "Green" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
@@ -2609,10 +2599,17 @@ function Set-ConfigurationFiles
     }
     
     # Modify license file path
-    if ($versionToInstall -eq "8.0")
+    if ($sitecoreVersion -eq 8.0)
     {
         Write-Message "Changing license file path" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
         $sitecoreConfig.configuration.SelectSingleNode("sitecore/settings/setting[@name='LicenseFile']").SetAttribute("value", "`$(dataFolder)/license/license.xml")
+    }
+
+    # Comment out the entry for SitecoreAntiCSRF
+    if (Test-ProcessingServerRole)
+    {
+        $node = $webconfig.configuration.SelectSingleNode("system.webServer/modules/add[@name='SitecoreAntiCSRF']")
+        $node.ParentNode.InnerXml = $node.ParentNode.InnerXml.Replace($node.OuterXml, $node.OuterXml.Insert(0, "<!--").Insert($node.OuterXml.Length+4, "-->"))
     }
 
     Write-Message "Saving changes to Web.config" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
@@ -2755,6 +2752,21 @@ function Set-ConfigurationFiles
         Write-Message "Commenting out connection strings not need on CD server" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     }
 
+    # Comment out connection strings not needed by Processing server
+    if ((Test-ProcessingServerRole) -and $script:configSettings.WebServer.CMServerSettings.Processing.DeactivateConnectionStrings)
+    {        
+        $connectionStringNames = $script:configSettings.Database.WebDatabaseCopies | % { $_.ConnectionStringName }
+        $connectionStringNames += "web"
+
+        foreach($name in $connectionStringNames)
+        {
+            $node = $connectionStringsConfig.SelectSingleNode("connectionStrings/add[@name='$name']")
+            $node.ParentNode.InnerXml = $node.ParentNode.InnerXml.Replace($node.OuterXml, $node.OuterXml.Insert(0, "<!--").Insert($node.OuterXml.Length+4, "-->"))
+        }
+
+        Write-Message "Commenting out connection strings not need on Processing server" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+    }
+
     # Set the reporting.apikey connection string
     $node = $connectionStringsConfig.SelectSingleNode("connectionStrings/add[@name='reporting.apikey']")
     if ($node -ne $null)
@@ -2771,9 +2783,8 @@ function Set-ConfigurationFiles
     #endregion
 
     #region Edit Sitecore.config...
-    if ($versionToInstall -ne "8.0")
+    if ($sitecoreVersion -gt 8.0)
     {
-        #TODO only do this for version xxx and above, otherwise I must modify web.config
         $sitecoreConfigPath = Join-Path $installPath -ChildPath "Website\App_Config\Sitecore.config"
         $sitecoreConfig = [xml](Get-Content $sitecoreConfigPath)
         $backup = $sitecoreConfigPath + "__$currentDate"
@@ -2784,6 +2795,23 @@ function Set-ConfigurationFiles
         # Modify license file path
         Write-Message "Changing license file path" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
         $sitecoreConfig.SelectSingleNode("sitecore/settings/setting[@name='LicenseFile']").SetAttribute("value", "`$(dataFolder)/license/license.xml")
+
+        if (Test-ProcessingServerRole)
+        {
+            # Comment out web <database> element for Processing server
+            Write-Message "Commenting out web <database> element" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+            $node = $sitecoreConfig.SelectSingleNode("sitecore/databases/database[@id='web']")
+            $node.ParentNode.InnerXml = $node.ParentNode.InnerXml.Replace($node.OuterXml, $node.OuterXml.Insert(0, "<!--").Insert($node.OuterXml.Length+4, "-->"))
+
+            # Comment out PublishAgent
+            Write-Message "Commenting out PublishAgent" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+            $node = $sitecoreConfig.SelectSingleNode("sitecore/scheduling/agent[@type='Sitecore.Tasks.PublishAgent']")
+            $node.ParentNode.InnerXml = $node.ParentNode.InnerXml.Replace($node.OuterXml, $node.OuterXml.Insert(0, "<!--").Insert($node.OuterXml.Length+4, "-->"))
+
+            # Modify website <site> element
+            Write-Message "Change database to master for the 'website' <site> element " "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+            $node = $sitecoreConfig.SelectSingleNode("sitecore/sites/site[@name='website']").SetAttribute("database", "master")
+        }
 
         Write-Message "Saving Sitecore.config" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
         $sitecoreConfig.Save($sitecoreConfigPath)
@@ -2899,7 +2927,7 @@ function Set-ConfigurationFiles
     }
     #endregion
 
-    #region Configure CM/CD/PublishingServer roles
+    #region Configure CM/CD/Publishing/Processing roles
     if ($script:configSettings.WebServer.CDServerSettings.Enabled -and $script:configSettings.WebServer.CDServerSettings.ConfigureFilesForCD)
     {
         Disable-FilesForCDServer
@@ -2916,6 +2944,12 @@ function Set-ConfigurationFiles
         Disable-SitecoreVersionPage
     }
 
+    if ((Test-ProcessingServerRole) -and $script:configSettings.WebServer.CMServerSettings.Processing.ConfigureFilesForProcessing)
+    {
+        Disable-FilesForProcessingServer
+        Enable-FilesForProcessingServer
+    }
+
     $scalabilityConfigPath = Join-Path $installPath -ChildPath "Website\App_Config\Include\ScalabilitySettings.config"
     if (Test-Path $scalabilityConfigPath)
     {
@@ -2930,7 +2964,7 @@ function Set-ConfigurationFiles
         Write-Message "Enabled: $scalabilityConfigPath" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     }
 
-    # Edit ScalabilitySettings.config - set Sitecore's instance name
+    #region Edit ScalabilitySettings.config
     $scalabilityConfigPath = Join-Path $installPath -ChildPath "Website\App_Config\Include\ScalabilitySettings.config"
     $scalabilityConfig = [xml](Get-Content $scalabilityConfigPath)
     $currentDate = (Get-Date).ToString("yyyyMMdd_hh-mm-s")
@@ -2996,6 +3030,36 @@ function Set-ConfigurationFiles
     }
     #endregion
 
+    #region Sitecore.ContentSearch.DefaultConfigurations.config
+    if (Test-ProcessingServerRole)
+    {
+        $searchConfigPath = Join-Path $installPath -ChildPath "Website\App_Config\Include\Sitecore.ContentSearch.DefaultConfigurations.config"
+        $searchConfig = [xml](Get-Content $searchConfigPath)
+        $backup = $searchConfigPath + "__$currentDate"
+        Write-Message "Backing up Sitecore.ContentSearch.DefaultConfigurations.config" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        $searchConfig.Save($backup)
+        $backupFiles.Add($backup)
+
+        # Comment out web-related index strategies
+        $nodes = $searchConfig.configuration.SelectNodes("sitecore/contentSearch/indexConfigurations/indexUpdateStrategies/*/param[@desc='database'][text()='web']")
+        $total = $nodes.Count
+        for ($i=0; $i -lt $total; $i++)
+        {
+            Write-Message "Commenting out web-related index update strategy" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+            $nodes = $searchConfig.configuration.SelectNodes("sitecore/contentSearch/indexConfigurations/indexUpdateStrategies/*/param[@desc='database'][text()='web']")
+
+            $strategy = $nodes[0].ParentNode 
+            $strategy = Remove-ChildXmlComments $strategy
+            $strategy.ParentNode.InnerXml = $strategy.ParentNode.InnerXml.Replace($strategy.OuterXml, $strategy.OuterXml.Insert(0, "<!--").Insert($strategy.OuterXml.Length+4, "-->"))
+        }
+
+        Write-Message "Saving changes to Sitecore.ContentSearch.DefaultConfigurations.config" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        $searchConfig.Save($searchConfigPath)
+    }
+    #endregion
+
+    #endregion
+
     Write-Message "Modifying config files complete!" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     return $backupFiles
 }
@@ -3059,7 +3123,7 @@ function Set-FileSystemPermissions([string]$iisSiteName)
 
 function Block-AnonymousUsers([string]$iisSiteName)
 {
-    Write-Message "Blocking anonymous access to sensitive folders on CD server." "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+    Write-Message "Blocking anonymous access to sensitive folders on server." "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     $filter = "/system.WebServer/security/authentication/anonymousAuthentication"
     $folderList = @("/App_Config", "/sitecore/admin", "/sitecore/debug", "/sitecore/shell/WebService")
     foreach ($folder in $folderList)
@@ -3100,6 +3164,19 @@ function Set-SecuritySettings([string]$iisSiteName)
         {
             Revoke-ExecutePermission $iisSiteName "temp"
             Revoke-ExecutePermission $iisSiteName "upload"
+        }
+    }
+
+    if (Test-ProcessingServerRole)
+    {
+        if ($script:configSettings.WebServer.CMServerSettings.Processing.ApplyIPWhitelist)
+        {
+            Set-IpRestrictions $iisSiteName
+        }
+
+        if ($script:configSettings.WebServer.CMServerSettings.Processing.PreventAnonymousAccess)
+        {
+            Block-AnonymousUsers $iisSiteName
         }
     }
     
@@ -3235,7 +3312,7 @@ function Initialize-SitecoreInstaller([string]$configPath)
         throw "configXml is null"
     }
 
-    New-ConfigSettings $configXml    
+    New-ConfigSettings $configXml
         
     if (!(Test-PreRequisites))
     {
@@ -3256,7 +3333,7 @@ function Initialize-SitecoreInstaller([string]$configPath)
         New-Item $script:configSettings.WebServer.SitecoreInstallPath -type directory -force | Out-Null
     }
 
-    $versionToInstall = Get-SitecoreVersion $TRUE
+    $versionToInstall = Get-SitecoreVersion -GetFromZip
     if ($versionToInstall -eq "10.0")
     {
         New-SitecoreConfigurationCsvFile $script:configSettings.SitecoreConfigSpreadsheetPath
@@ -3292,7 +3369,7 @@ function Install-SitecoreApplication([string]$configPath, [bool]$SuppressOutputT
 
     $stopWatch = [Diagnostics.Stopwatch]::StartNew()
     $date = Get-Date    
-    $message = "Starting Sitecore install [Sitecore.Kernel.dll version $(Get-SitecoreVersion $TRUE $TRUE)] - $date" 
+    $message = "Starting Sitecore install [Sitecore.Kernel.dll version $(Get-SitecoreVersion -GetFromZip -GetFullVersion)] - $date" 
     Write-Message $message "Green" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
 
     $isCMRole = $false
@@ -3302,6 +3379,10 @@ function Install-SitecoreApplication([string]$configPath, [bool]$SuppressOutputT
         if (Test-PublishingServerRole)
         {
             $role = "Publishing Server"
+        }
+        elseif (Test-ProcessingServerRole)
+        {
+            $role = "Processing Server"            
         }
         $isCMRole = $true
     }
