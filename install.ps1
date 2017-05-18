@@ -519,6 +519,7 @@ function New-ConfigSettings([xml]$config)
     $cdServerSettings | Add-Member -MemberType NoteProperty -Name DisableUploadWatcher -Value (Get-ConfigOption $config "WebServer/CDServerSettings/DisableUploadWatcher")
     $cdServerSettings | Add-Member -MemberType NoteProperty -Name DisableExperienceAnalyticsAssemblies -Value (Get-ConfigOption $config "WebServer/CDServerSettings/DisableExperienceAnalyticsAssemblies")
     $cdServerSettings | Add-Member -MemberType NoteProperty -Name DisableSitecoreVersionPage -Value (Get-ConfigOption $config "WebServer/CDServerSettings/DisableSitecoreVersionPage")
+    $cdServerSettings | Add-Member -MemberType NoteProperty -Name RemovePhantomJs -Value (Get-ConfigOption $config "WebServer/CDServerSettings/RemovePhantomJs")
     #endregion
 
     #region IPWhiteList
@@ -2563,6 +2564,39 @@ function Enable-FilesForProcessingServer
     }
 }
 
+
+function Remove-PhantomJs([System.Collections.Generic.List[string]]$backupfiles)
+{
+    # remove phantomjs directory
+    $phantomJsFolder = "Data\tools\phantomjs"
+    $phantomJsPath = Join-Path $script:configSettings.WebServer.SitecoreInstallPath -ChildPath $phantomJsFolder
+    if(Test-Path $phantomJsPath)
+    {
+        Get-ChildItem -Path $phantomJsPath -Recurse | Remove-Item -Force
+        Remove-Item -Path $phantomJsPath
+        Write-Message "Removed PhantomJs directory " "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+    }
+    
+    # remove getScreenshotUrl pipeline
+    $contentTestingConfig = "Website/App_Config/Include/ContentTesting/Sitecore.ContentTesting.config"
+    $contentTestingConfigPath = Join-Path $script:configSettings.WebServer.SitecoreInstallPath -ChildPath $contentTestingConfig
+    $contentTestingConfig = [xml](Get-Content $contentTestingConfigPath)
+    
+    Write-Message "Backing up Sitecore.ContentTesting.config" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+    
+    $currentDate = (Get-Date).ToString("yyyyMMdd_hh-mm-s")
+    $backup = [string]$contentTestingConfigPath + "__$currentDate"
+    $contentTestingConfig.Save($backup)
+    $backupFiles.Add($backup)
+
+    $node = $contentTestingConfig.configuration.sitecore.pipelines.getScreenshotForUrl
+    $contentTestingConfig.configuration.sitecore.pipelines.RemoveChild($node) | Out-Null
+    $contentTestingConfig.Save($contentTestingConfigPath)
+    Write-Message "Removed getScreenshotForUrl pipeline" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+
+    return $backupfiles
+}
+
 function Set-ConfigurationFiles
 {
     Write-Message "`nWriting changes to config files..." "Green" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
@@ -2956,12 +2990,17 @@ function Set-ConfigurationFiles
         Disable-SitecoreVersionPage
     }
 
+    if ($script:configSettings.WebServer.CDServerSettings.Enabled -and $script:configSettings.WebServer.CDServerSettings.RemovePhantomJs)
+    {
+        [System.Collections.Generic.List[string]]$backupFiles = Remove-PhantomJs $backupFiles
+    }
+
     if ((Test-ProcessingServerRole) -and $script:configSettings.WebServer.CMServerSettings.Processing.ConfigureFilesForProcessing)
     {
         Disable-FilesForProcessingServer
         Enable-FilesForProcessingServer
     }
-
+        
     $scalabilityConfigPath = Join-Path $installPath -ChildPath "Website\App_Config\Include\ScalabilitySettings.config"
     if (Test-Path $scalabilityConfigPath)
     {
