@@ -34,7 +34,10 @@ function Remove-BackupFiles([System.Collections.Generic.List[string]]$backupFile
     Write-Message "`nDeleting backed up files..." "Green" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     foreach ($file in $backupFiles)
     {
-        Remove-Item $file
+        if(Test-Path($file))
+        {
+            Remove-Item $file
+        }
     }
     Write-Message "Removed back ups!" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
 }
@@ -2935,6 +2938,37 @@ function Set-ConfigurationFiles
         Enable-FilesForCDServer
     }
 
+    # Remove PhantomJs on CD server
+    if ($script:configSettings.WebServer.CDServerSettings.Enabled -and $script:configSettings.WebServer.CDServerSettings.RemovePhantomJs)
+    {
+        # remove phantomjs directory
+        $phantomJsFolder = "Data\tools\phantomjs"
+        $phantomJsPath = Join-Path $script:configSettings.WebServer.SitecoreInstallPath -ChildPath $phantomJsFolder
+        if(Test-Path $phantomJsPath)
+        {
+            Get-ChildItem -Path $phantomJsPath -Recurse | Remove-Item -Force
+            Remove-Item -Path $phantomJsPath
+            Write-Message "Removed PhantomJs directory " "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        }
+        
+        # remove getScreenshotUrl pipeline
+        $contentTestingConfig = "Website/App_Config/Include/ContentTesting/Sitecore.ContentTesting.config"
+        $contentTestingConfigPath = Join-Path $script:configSettings.WebServer.SitecoreInstallPath -ChildPath $contentTestingConfig
+        $contentTestingConfig = [xml](Get-Content $contentTestingConfigPath)
+        
+        Write-Message "Backing up Sitecore.ContentTesting.config" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        
+        $currentDate = (Get-Date).ToString("yyyyMMdd_hh-mm-s")
+        $backup = $contentTestingConfigPath + "__$currentDate"
+        $contentTestingConfig.Save($backup)
+        $backupFiles.Add($backup)
+
+        $node = $contentTestingConfig.configuration.sitecore.pipelines.getScreenshotForUrl
+        $contentTestingConfig.configuration.sitecore.pipelines.RemoveChild($node)
+        $contentTestingConfig.Save($contentTestingConfigPath)
+        Write-Message "Removed getScreenshotForUrl pipeline" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+    }
+
     if ($script:configSettings.WebServer.CDServerSettings.Enabled -and $script:configSettings.WebServer.CDServerSettings.DisableExperienceAnalyticsAssemblies)
     {
         Disable-ExperienceAnalyticsAssemblies
@@ -3140,32 +3174,6 @@ function Revoke-ExecutePermission([string]$iisSiteName, [string]$folderPath)
     Set-WebConfigurationProperty /system.WebServer/handlers "IIS:\sites\$iisSiteName\$folderPath" -Name accessPolicy -value "Read"
 }
 
-function Remove-PhantomJs
-{
-    # remove phantomjs directory
-    $phantomJsFolder = "Data\tools\phantomjs"
-    $phantomJsPath = Join-Path $script:configSettings.WebServer.SitecoreInstallPath -ChildPath $phantomJsFolder
-    if(Test-Path $phantomJsPath)
-    {
-        Get-ChildItem -Path $phantomJsPath -Recurse | Remove-Item -Force
-        Remove-Item -Path $phantomJsPath
-        Write-Message "Removed PhantomJs directory " "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
-    }
-    
-    # remove getScreenshotUrl pipeline
-    $contentTestingConfig = "Website/App_Config/Include/ContentTesting/Sitecore.ContentTesting.config"
-    $contentTestingConfigPath = Join-Path $script:configSettings.WebServer.SitecoreInstallPath -ChildPath $contentTestingConfig
-    $contentTestingConfig = [xml](Get-Content $contentTestingConfigPath)
-    $currentDate = (Get-Date).ToString("yyyyMMdd_hh-mm-s")
-    $backupContentTesting = $contentTestingConfigPath + "__$currentDate"
-    $contentTestingConfig.Save($backupContentTesting)
-    $node = $contentTestingConfig.configuration.sitecore.pipelines.getScreenshotForUrl
-    $contentTestingConfig.configuration.sitecore.pipelines.RemoveChild($node)
-    $contentTestingConfig.Save($contentTestingConfigPath)
-    Remove-Item -Path $backupContentTesting
-    Write-Message "Removed getScreenshotForUrl pipeline" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
-}
-
 function Set-SecuritySettings([string]$iisSiteName)
 {
     Write-Message "`nApplying recommended security settings..." "Green" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
@@ -3191,11 +3199,6 @@ function Set-SecuritySettings([string]$iisSiteName)
         {
             Revoke-ExecutePermission $iisSiteName "temp"
             Revoke-ExecutePermission $iisSiteName "upload"
-        }
-
-        if ($script:configSettings.WebServer.CDServerSettings.RemovePhantomJs)
-        {
-            Remove-PhantomJs
         }
         
     }
