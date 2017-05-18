@@ -34,10 +34,7 @@ function Remove-BackupFiles([System.Collections.Generic.List[string]]$backupFile
     Write-Message "`nDeleting backed up files..." "Green" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     foreach ($file in $backupFiles)
     {
-        if(Test-Path($file))
-        {
-            Remove-Item $file
-        }
+        Remove-Item $file
     }
     Write-Message "Removed back ups!" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
 }
@@ -183,6 +180,11 @@ function Get-DatabaseInstallFolderPath
 
         return $dbFilePath.Unc
     }
+}
+
+function Get-AspNetRegIisPath
+{
+    return (Join-Path $env:windir -ChildPath "Microsoft.NET\Framework64\v4.0.30319\aspnet_regiis.exe")
 }
 
 function Find-FolderInZipFile($items, [string]$folderName)
@@ -669,6 +671,7 @@ function New-ConfigSettings([xml]$config)
     $webserver | Add-Member -MemberType NoteProperty -Name SitecoreInstanceName -Value $sitecoreInstanceName
     $webserver | Add-Member -MemberType NoteProperty -Name ReportingApiKey -Value $reportingApiKey
     $webserver | Add-Member -MemberType NoteProperty -Name LastChildFolderOfIncludeDirectory -Value $lastChildFolderOfIncludeDirectory
+    $webserver | Add-Member -MemberType NoteProperty -Name EncryptConnectionStrings -Value (Get-ConfigOption $config "WebServer/EncryptConnectionStrings")
     $webserver | Add-Member -MemberType NoteProperty -Name IISWebSiteName -Value $iisWebSiteName
     $webserver | Add-Member -MemberType NoteProperty -Name DefaultRuntimeVersion -Value $defaultRuntimeVersion
     $webserver | Add-Member -MemberType NoteProperty -Name AppPoolIdentity -Value $appPoolIdentity
@@ -1351,6 +1354,12 @@ function Test-ConfigurationSettings
     if ([string]::IsNullOrEmpty($script:configSettings.WebServer.SitecoreInstallFolder))
     {
         Write-Message "SitecoreInstallFolder cannot be null or empty" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+        return $FALSE
+    }
+
+    if ($script:configSettings.WebServer.EncryptConnectionStrings -and (!(Test-Path (Get-AspNetRegIisPath))))
+    {
+        Write-Message "Couldn't find aspnet_regiis executable, which is required for encrypting connection strings" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
         return $FALSE
     }
 
@@ -2555,6 +2564,39 @@ function Enable-FilesForProcessingServer
     }
 }
 
+
+function Remove-PhantomJs([System.Collections.Generic.List[string]]$backupfiles)
+{
+    # remove phantomjs directory
+    $phantomJsFolder = "Data\tools\phantomjs"
+    $phantomJsPath = Join-Path $script:configSettings.WebServer.SitecoreInstallPath -ChildPath $phantomJsFolder
+    if(Test-Path $phantomJsPath)
+    {
+        Get-ChildItem -Path $phantomJsPath -Recurse | Remove-Item -Force
+        Remove-Item -Path $phantomJsPath
+        Write-Message "Removed PhantomJs directory " "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+    }
+    
+    # remove getScreenshotUrl pipeline
+    $contentTestingConfig = "Website/App_Config/Include/ContentTesting/Sitecore.ContentTesting.config"
+    $contentTestingConfigPath = Join-Path $script:configSettings.WebServer.SitecoreInstallPath -ChildPath $contentTestingConfig
+    $contentTestingConfig = [xml](Get-Content $contentTestingConfigPath)
+    
+    Write-Message "Backing up Sitecore.ContentTesting.config" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+    
+    $currentDate = (Get-Date).ToString("yyyyMMdd_hh-mm-s")
+    $backup = [string]$contentTestingConfigPath + "__$currentDate"
+    $contentTestingConfig.Save($backup)
+    $backupFiles.Add($backup)
+
+    $node = $contentTestingConfig.configuration.sitecore.pipelines.getScreenshotForUrl
+    $contentTestingConfig.configuration.sitecore.pipelines.RemoveChild($node) | Out-Null
+    $contentTestingConfig.Save($contentTestingConfigPath)
+    Write-Message "Removed getScreenshotForUrl pipeline" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+
+    return $backupfiles
+}
+
 function Set-ConfigurationFiles
 {
     Write-Message "`nWriting changes to config files..." "Green" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
@@ -2938,37 +2980,6 @@ function Set-ConfigurationFiles
         Enable-FilesForCDServer
     }
 
-    # Remove PhantomJs on CD server
-    if ($script:configSettings.WebServer.CDServerSettings.Enabled -and $script:configSettings.WebServer.CDServerSettings.RemovePhantomJs)
-    {
-        # remove phantomjs directory
-        $phantomJsFolder = "Data\tools\phantomjs"
-        $phantomJsPath = Join-Path $script:configSettings.WebServer.SitecoreInstallPath -ChildPath $phantomJsFolder
-        if(Test-Path $phantomJsPath)
-        {
-            Get-ChildItem -Path $phantomJsPath -Recurse | Remove-Item -Force
-            Remove-Item -Path $phantomJsPath
-            Write-Message "Removed PhantomJs directory " "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
-        }
-        
-        # remove getScreenshotUrl pipeline
-        $contentTestingConfig = "Website/App_Config/Include/ContentTesting/Sitecore.ContentTesting.config"
-        $contentTestingConfigPath = Join-Path $script:configSettings.WebServer.SitecoreInstallPath -ChildPath $contentTestingConfig
-        $contentTestingConfig = [xml](Get-Content $contentTestingConfigPath)
-        
-        Write-Message "Backing up Sitecore.ContentTesting.config" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
-        
-        $currentDate = (Get-Date).ToString("yyyyMMdd_hh-mm-s")
-        $backup = $contentTestingConfigPath + "__$currentDate"
-        $contentTestingConfig.Save($backup)
-        $backupFiles.Add($backup)
-
-        $node = $contentTestingConfig.configuration.sitecore.pipelines.getScreenshotForUrl
-        $contentTestingConfig.configuration.sitecore.pipelines.RemoveChild($node)
-        $contentTestingConfig.Save($contentTestingConfigPath)
-        Write-Message "Removed getScreenshotForUrl pipeline" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
-    }
-
     if ($script:configSettings.WebServer.CDServerSettings.Enabled -and $script:configSettings.WebServer.CDServerSettings.DisableExperienceAnalyticsAssemblies)
     {
         Disable-ExperienceAnalyticsAssemblies
@@ -2979,12 +2990,17 @@ function Set-ConfigurationFiles
         Disable-SitecoreVersionPage
     }
 
+    if ($script:configSettings.WebServer.CDServerSettings.Enabled -and $script:configSettings.WebServer.CDServerSettings.RemovePhantomJs)
+    {
+        [System.Collections.Generic.List[string]]$backupFiles = Remove-PhantomJs $backupFiles
+    }
+
     if ((Test-ProcessingServerRole) -and $script:configSettings.WebServer.CMServerSettings.Processing.ConfigureFilesForProcessing)
     {
         Disable-FilesForProcessingServer
         Enable-FilesForProcessingServer
     }
-
+        
     $scalabilityConfigPath = Join-Path $installPath -ChildPath "Website\App_Config\Include\ScalabilitySettings.config"
     if (Test-Path $scalabilityConfigPath)
     {
@@ -3174,6 +3190,14 @@ function Revoke-ExecutePermission([string]$iisSiteName, [string]$folderPath)
     Set-WebConfigurationProperty /system.WebServer/handlers "IIS:\sites\$iisSiteName\$folderPath" -Name accessPolicy -value "Read"
 }
 
+function Protect-ConnectionStrings
+{
+    Write-Message "Encrypting the contents of ConnectionString.config." "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+    $webrootPath = Join-Path $script:configSettings.WebServer.SitecoreInstallPath -ChildPath "Website"
+    $args = "-pef connectionStrings " + $webrootPath
+    Start-Process -FilePath (Get-AspNetRegIisPath) -ArgumentList $args
+}
+
 function Set-SecuritySettings([string]$iisSiteName)
 {
     Write-Message "`nApplying recommended security settings..." "Green" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
@@ -3182,6 +3206,11 @@ function Set-SecuritySettings([string]$iisSiteName)
 
     Add-AppPoolIdentityToLocalGroup "IIS_IUSRS" $iisSiteName
     Add-AppPoolIdentityToLocalGroup "Performance Monitor Users" $iisSiteName
+
+    if ($script:configSettings.WebServer.EncryptConnectionStrings)
+    {
+        Protect-ConnectionStrings
+    }
 
     if ($script:configSettings.WebServer.CDServerSettings.Enabled)
     {
@@ -3200,7 +3229,6 @@ function Set-SecuritySettings([string]$iisSiteName)
             Revoke-ExecutePermission $iisSiteName "temp"
             Revoke-ExecutePermission $iisSiteName "upload"
         }
-        
     }
 
     if (Test-ProcessingServerRole)
