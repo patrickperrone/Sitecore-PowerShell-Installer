@@ -16,6 +16,7 @@ The Sitecore-PowerShell-Installer script enables you to install Production-ready
 - Full supports MongoDB's connection string specification
 - May supply a Solr base address
 - Choose to use SQL as a session state server
+- Optionally encrypt connection strings
 - Many CD-hardening options
 
 ### Software Dependencies
