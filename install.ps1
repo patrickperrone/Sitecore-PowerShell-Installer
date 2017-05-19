@@ -92,6 +92,44 @@ function Get-ConfigOption([xml]$config, [string]$optionName, [bool]$isAttribute=
     return $optionValue
 }
 
+
+function Get-ConfigValue([xml]$config, [string]$elementName, [bool]$isRequired=$FALSE, [bool]$isAttribute=$FALSE)
+{
+    $elementValue = ""
+
+    if ($isAttribute)
+    {
+        $attributeName = Split-Path -Leaf $elementName
+        $elementName = Split-Path $elementName
+        $elementName = $elementName.Replace("\", "//")
+        $node = $config.InstallSettings.SelectSingleNode($elementName)
+
+        if ($node -ne $null)
+        {
+            $attributeValue = $node.GetAttribute($attributeName).Trim()
+            if (!([string]::IsNullOrEmpty($attributeValue)))
+            {
+                $optionValue = [string]$attributeValue.Trim()
+            }
+        }
+    }
+    else
+    {
+        $nodeValue = $config.InstallSettings.SelectSingleNode($elementName).InnerText.Trim()
+        if (!([string]::IsNullOrEmpty($nodeValue)))
+        {
+            $elementValue = [string]$nodeValue.Trim()
+        }
+    }
+
+    if($isRequired -and ([string]::IsNullOrEmpty($elementValue)))
+    {
+        Write-Error "Value for " + $elementValue + " is required."
+    }
+
+    return $elementValue
+}
+
 function Get-SqlLoginAccountForDataAccess
 {
     # Top priority is Application Pool Identity
@@ -3093,7 +3131,7 @@ function Set-ConfigurationFiles
         }
     }
     #endregion
-    
+
     #region Edit ScalabilitySettings.config
     $scalabilityConfigPath = Join-Path $installPath -ChildPath "Website\App_Config\Include\ScalabilitySettings.config"
     $scalabilityConfig = [xml](Get-Content $scalabilityConfigPath)
