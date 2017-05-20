@@ -124,7 +124,7 @@ function Get-ConfigValue([xml]$config, [string]$elementName, [bool]$isRequired=$
 
     if($isRequired -and ([string]::IsNullOrEmpty($elementValue)))
     {
-        Write-Error "Value for " + $elementValue + " is required."
+        throw "Configuration value for " + $elementName + " is required."
     }
 
     return $elementValue
