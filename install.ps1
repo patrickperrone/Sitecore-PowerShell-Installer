@@ -2564,7 +2564,6 @@ function Enable-FilesForProcessingServer
     }
 }
 
-
 function Remove-PhantomJs([System.Collections.Generic.List[string]]$backupfiles)
 {
     # remove phantomjs directory
@@ -3000,7 +2999,7 @@ function Set-ConfigurationFiles
         Disable-FilesForProcessingServer
         Enable-FilesForProcessingServer
     }
-        
+
     $scalabilityConfigPath = Join-Path $installPath -ChildPath "Website\App_Config\Include\ScalabilitySettings.config"
     if (Test-Path $scalabilityConfigPath)
     {
