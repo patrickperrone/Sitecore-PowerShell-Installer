@@ -2799,9 +2799,10 @@ function Set-ConfigurationFiles
 
     # Comment out connection strings not needed by Processing server
     if ((Test-ProcessingServerRole) -and $script:configSettings.WebServer.CMServerSettings.Processing.DeactivateConnectionStrings)
-    {        
-        $connectionStringNames = $script:configSettings.Database.WebDatabaseCopies | % { $_.ConnectionStringName }
-        $connectionStringNames += "web"
+    {
+        $connectionStringNames = New-Object 'System.Collections.Generic.List[string]'
+        $script:configSettings.Database.WebDatabaseCopies | ForEach-Object { $connectionStringNames.Add($_.ConnectionStringName) }
+        $connectionStringNames.Add("web")
 
         foreach($name in $connectionStringNames)
         {
