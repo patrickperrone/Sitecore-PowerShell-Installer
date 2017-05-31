@@ -2594,7 +2594,6 @@ function Enable-FilesForProcessingServer
     }
 }
 
-
 function Remove-PhantomJs([System.Collections.Generic.List[string]]$backupfiles)
 {
     # remove phantomjs directory
@@ -2877,9 +2876,10 @@ function Set-ConfigurationFiles
 
     # Comment out connection strings not needed by Processing server
     if ((Test-ProcessingServerRole) -and $script:configSettings.WebServer.CMServerSettings.Processing.DeactivateConnectionStrings)
-    {        
-        $connectionStringNames = $script:configSettings.Database.WebDatabaseCopies | % { $_.ConnectionStringName }
-        $connectionStringNames += "web"
+    {
+        $connectionStringNames = New-Object 'System.Collections.Generic.List[string]'
+        $script:configSettings.Database.WebDatabaseCopies | ForEach-Object { $connectionStringNames.Add($_.ConnectionStringName) }
+        $connectionStringNames.Add("web")
 
         foreach($name in $connectionStringNames)
         {
@@ -3077,7 +3077,7 @@ function Set-ConfigurationFiles
         Disable-FilesForProcessingServer
         Enable-FilesForProcessingServer
     }
-        
+
     $scalabilityConfigPath = Join-Path $installPath -ChildPath "Website\App_Config\Include\ScalabilitySettings.config"
     if (Test-Path $scalabilityConfigPath)
     {
