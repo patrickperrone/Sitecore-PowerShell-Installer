@@ -92,6 +92,18 @@ function Get-ConfigOption([xml]$config, [string]$optionName, [bool]$isAttribute=
     return $optionValue
 }
 
+function Find-MediaRequestConfig
+{
+    $mediaRequestConfig = "Website/App_Config/Include/Sitecore.Media.RequestProtection.config"
+    $mediaRequestConfigPath = Join-Path $script:configSettings.WebServer.SitecoreInstallPath -ChildPath $mediaRequestConfig
+    if(Test-Path $mediaRequestConfigPath -PathType Leaf)
+    {
+        return $mediaRequestConfigPath
+    }
+    
+    return $null
+}
+
 function Get-SqlLoginAccountForDataAccess
 {
     # Top priority is Application Pool Identity
@@ -522,6 +534,23 @@ function New-ConfigSettings([xml]$config)
     $cdServerSettings | Add-Member -MemberType NoteProperty -Name RemovePhantomJs -Value (Get-ConfigOption $config "WebServer/CDServerSettings/RemovePhantomJs")
     #endregion
 
+    #region MediaRequestProtection
+    $mediaRequestProtection = New-Object -TypeName PSObject
+    
+    $sharedSecret = ""
+    if (!([string]::IsNullOrEmpty($config.InstallSettings.WebServer.MediaRequestProtection.SharedSecret)))
+    {
+        $sharedSecret = $config.InstallSettings.WebServer.MediaRequestProtection.SharedSecret.Trim()
+    }
+    $mediaRequestLogging = ""
+    if (!([string]::IsNullOrEmpty($config.InstallSettings.WebServer.MediaRequestProtection.LoggingEnabled)))
+    {
+        $mediaRequestLogging = Get-ConfigOption $config "WebServer/MediaRequestProtection/LoggingEnabled"
+    }
+    $mediaRequestProtection | Add-Member -MemberType NoteProperty -Name SharedSecret -Value $sharedSecret
+    $mediaRequestProtection | Add-Member -MemberType NoteProperty -Name LoggingEnabled -Value $mediaRequestLogging
+    #endregion
+
     #region IPWhiteList
     $ipWhiteList = New-Object 'System.Collections.Generic.List[string]'
     foreach ($ip in ($config.InstallSettings.WebServer.IPWhiteList.IP))
@@ -684,6 +713,7 @@ function New-ConfigSettings([xml]$config)
     $webserver | Add-Member -MemberType NoteProperty -Name SessionStateProvider -Value $sessionStateProvider
     $webserver | Add-Member -MemberType NoteProperty -Name Solr -Value $solr
     $webserver | Add-Member -MemberType NoteProperty -Name MongoDb -Value $mongodb
+    $webserver | Add-Member -MemberType NoteProperty -Name MediaRequestProtection -Value $mediaRequestProtection
     #endregion
 
     #region Database
@@ -1627,7 +1657,7 @@ function Test-ConfigurationSettings
             return $FALSE
         }
     }
-
+    
     return $TRUE
 }
 #endregion
@@ -2596,6 +2626,53 @@ function Remove-PhantomJs([System.Collections.Generic.List[string]]$backupfiles)
     return $backupfiles
 }
 
+function Set-MediaRequestProtection([System.Collections.Generic.List[string]]$backupfiles)
+{
+    Write-Message "Updating Media Request Protection settings..." "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+    $mediaRequestConfigPath = Find-MediaRequestConfig
+    $mediaRequestConfig = [xml](Get-Content $mediaRequestConfigPath)
+
+    $currentDate = (Get-Date).ToString("yyyyMMdd_hh-mm-s")
+    $backup = [string]$mediaRequestConfigPath + "__$currentDate"
+    $mediaRequestConfig.Save($backup)
+    $backupFiles.Add($backup)
+
+    $sharedSecret = $script:configSettings.WebServer.MediaRequestProtection.SharedSecret
+    if ([string]::IsNullOrEmpty($sharedSecret))
+    {
+        Write-Message "No value provided for Media Request Protection Shared Secret - Sitecore default value will be used" "Yellow" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+    }
+    else 
+    {
+        $mediaRequestConfig.configuration.sitecore.settings.SelectSingleNode("setting[@name='Media.RequestProtection.SharedSecret']").SetAttribute("value", $sharedSecret)  | Out-Null
+        Write-Message "Media Request Protection SharedSecret updated" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+    }
+
+    $loggingEnabled = $script:configSettings.WebServer.MediaRequestProtection.LoggingEnabled.ToString()
+    if ([string]::IsNullOrEmpty($loggingEnabled))
+    {
+        Write-Message "No value provided for Media Request Protection Logging - Sitecore default value will be used" "Yellow" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+    }
+    else 
+    {
+        $mediaRequestConfig.configuration.sitecore.settings.SelectSingleNode("setting[@name='Media.RequestProtection.Logging.Enabled']").SetAttribute("value", $loggingEnabled.ToLower()) | Out-Null
+        if($script:configSettings.WebServer.MediaRequestProtection.LoggingEnabled)
+        {
+            Write-Message "Media Request Protection Logging enabled." "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        }
+        else 
+        {
+            Write-Message "Media Request Protection Logging disabled." "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable  
+        }  
+    }
+
+    $mediaRequestConfig.Save($mediaRequestConfigPath)
+    
+    Write-Message "Media Request Protection update complete" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+
+    return $backupfiles
+}
+
 function Set-ConfigurationFiles
 {
     Write-Message "`nWriting changes to config files..." "Green" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
@@ -3014,6 +3091,13 @@ function Set-ConfigurationFiles
         Copy-Item -Path $match -Destination $scalabilityConfigPath
         Write-Message "Enabled: $scalabilityConfigPath" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     }
+
+    #region Edit Sitecore.Media.RequestProtection.config
+    if($script:configSettings.WebServer.CDServerSettings.Enabled -or $script:configSettings.WebServer.CMServerSettings.Enabled)
+    {
+        [System.Collections.Generic.List[string]]$backupFiles = Set-MediaRequestProtection $backupFiles
+    }
+    #endregion
 
     #region Edit ScalabilitySettings.config
     $scalabilityConfigPath = Join-Path $installPath -ChildPath "Website\App_Config\Include\ScalabilitySettings.config"
