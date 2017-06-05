@@ -1595,7 +1595,7 @@ function Test-ConfigurationSettings
         }
     }
 
-    if (Test-PublishingServerRole -and Test-ProcessingServerRole)
+    if ((Test-PublishingServerRole) -and (Test-ProcessingServerRole))
     {
             Write-Message "Prublishing and Processing are both enabled. The Sitecore instance cannot be a dedicated publishing and processing server at the same time." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
             return $FALSE
