@@ -497,7 +497,6 @@ function New-ConfigSettings([xml]$config)
     }
     $publishing | Add-Member -MemberType NoteProperty -Name Enabled -Value (Get-ConfigOption $config "WebServer/CMServerSettings/Publishing/enabled" $TRUE)
     $publishing | Add-Member -MemberType NoteProperty -Name PublishingInstance -Value $publishingInstance
-    #Todo: Publishing Server Settings
     $publishing | Add-Member -MemberType NoteProperty -Name ApplicationInitializationEnabled -Value (Get-ConfigOption $config "WebServer/CMServerSettings/Publishing/ApplicationInitializationEnabled" $FALSE)
     $publishing | Add-Member -MemberType NoteProperty -Name AppPoolIdleTimeout -Value $appPoolIdleTimeout
     $publishing | Add-Member -MemberType NoteProperty -Name DisableScheduledTaskExecution -Value (Get-ConfigOption $config "WebServer/CMServerSettings/Publishing/DisableScheduledTaskExecution")
@@ -939,7 +938,7 @@ function Test-PreRequisites
         return $FALSE
     }
 
-    if(Test-ApplicationInitialization)
+    if(Test-ApplicationInitializationSetting)
     {
         $moduleName = "Servermanager"
         if (!(Test-Module $moduleName))
@@ -1199,7 +1198,7 @@ function Test-PublishingServerRole
     return $FALSE
 }
 
-function Test-ApplicationInitialization
+function Test-ApplicationInitializationSetting
 {
     if (Test-PublishingServerRole)
     {    
@@ -2059,7 +2058,7 @@ function Enable-ApplicationInitializationAppPoolSettings
         [string]$appPoolName
     )
 
-    if(Test-ApplicationInitialization)
+    if(Test-ApplicationInitializationSetting)
     {
         Write-Message "Enabling Application Initialization module..." "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
         Add-WindowsFeature Web-AppInit | Out-Null
@@ -2085,7 +2084,7 @@ function Enable-ApplicationInitializationWebsiteSettings
         [string]$siteName
     )
 
-    if(Test-ApplicationInitialization)
+    if(Test-ApplicationInitializationSetting)
     {
         $site = Join-Path 'IIS:\Sites\' -ChildPath $siteName
         Set-ItemProperty $site -Name applicationDefaults.preloadEnabled -Value $true
@@ -2115,6 +2114,19 @@ function Initialize-WebSite
         $pool.managedRuntimeVersion = $script:configSettings.WebServer.DefaultRuntimeVersion
         $pool.processModel.loadUserProfile = $TRUE
         $pool.processModel.maxProcesses = 1
+
+        if (Test-PublishingServerRole)
+        {
+            $pool.startMode = "AlwaysRunning"
+            [int]$timeout = $script:configSettings.WebServer.CMServerSettings.Publishing.AppPoolIdleTimeout
+            if ($timeout -gt $pool.recycling.periodicRestart.time.TotalMinutes)
+            {
+                Write-Message "AppPoolIdleTimeout of $timeout minutes cannot be greater than the app pool's periodic restart time, using $($pool.recycling.periodicRestart.time.TotalMinutes) minutes instead." "Yellow" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+                $timeout = $pool.recycling.periodicRestart.time.TotalMinutes
+            }
+            $pool.processModel.idleTimeout = [TimeSpan]::FromMinutes($timeout)
+        }
+
         $pool | Set-Item
 
         Enable-ApplicationInitializationAppPoolSettings $appPoolName
@@ -2813,7 +2825,7 @@ function Set-ConfigurationFiles
     }
 
     # Set ApplicationInitialization for Publishing Server
-    if(Test-ApplicationInitialization)
+    if(Test-ApplicationInitializationSetting)
     {        
         $node = $webConfig.configuration.'system.webServer'.applicationInitialization
 
