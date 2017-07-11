@@ -497,6 +497,7 @@ function New-ConfigSettings([xml]$config)
     }
     $publishing | Add-Member -MemberType NoteProperty -Name Enabled -Value (Get-ConfigOption $config "WebServer/CMServerSettings/Publishing/enabled" $TRUE)
     $publishing | Add-Member -MemberType NoteProperty -Name PublishingInstance -Value $publishingInstance
+    $publishing | Add-Member -MemberType NoteProperty -Name ApplicationInitializationEnabled -Value (Get-ConfigOption $config "WebServer/CMServerSettings/Publishing/ApplicationInitializationEnabled" $FALSE)
     $publishing | Add-Member -MemberType NoteProperty -Name AppPoolIdleTimeout -Value $appPoolIdleTimeout
     $publishing | Add-Member -MemberType NoteProperty -Name DisableScheduledTaskExecution -Value (Get-ConfigOption $config "WebServer/CMServerSettings/Publishing/DisableScheduledTaskExecution")
     $publishing | Add-Member -MemberType NoteProperty -Name Parallel -Value $parallel
@@ -937,6 +938,16 @@ function Test-PreRequisites
         return $FALSE
     }
 
+    if(Test-ApplicationInitializationSetting)
+    {
+        $moduleName = "Servermanager"
+        if (!(Test-Module $moduleName))
+        {
+            Write-Message "Warning: IIS PowerShell Module ($moduleName) is not installed." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+            return $FALSE
+        }
+    }
+
     $versionToInstall = Get-SitecoreVersion -GetFromZip
     if ($versionToInstall -eq "10.0")
     {
@@ -1183,6 +1194,15 @@ function Test-PublishingServerRole
     if ($script:configSettings.WebServer.CMServerSettings.Enabled)
     {    
         return ($script:configSettings.WebServer.CMServerSettings.Publishing.Enabled)            
+    }
+    return $FALSE
+}
+
+function Test-ApplicationInitializationSetting
+{
+    if (Test-PublishingServerRole)
+    {    
+        return ($script:configSettings.WebServer.CMServerSettings.Publishing.ApplicationInitializationEnabled)            
     }
     return $FALSE
 }
@@ -2029,6 +2049,49 @@ function Set-IpRestrictions([string]$iisSiteName)
     }
 }
 
+function Enable-ApplicationInitializationAppPoolSettings
+{
+    [CmdletBinding()]
+    param
+    (
+        [Parameter(Mandatory=$true)]
+        [string]$appPoolName
+    )
+
+    if(Test-ApplicationInitializationSetting)
+    {
+        Write-Message "Enabling Application Initialization module..." "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        Add-WindowsFeature Web-AppInit | Out-Null
+        Write-Message "Application Initialization module enabled." "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+
+        Write-Message "Applying AppPool settings for Publishing Server Application Initialization..." "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        $appPoolPath = Join-Path 'IIS:\AppPools\' -ChildPath $appPoolName
+        Set-ItemProperty $appPoolPath -Name autoStart -Value $true
+        Set-ItemProperty $appPoolPath -Name startMode -Value "AlwaysRunning"
+        Set-ItemProperty $appPoolPath -Name processModel.idleTimeout -Value ([TimeSpan]::FromMinutes(0))
+        Set-ItemProperty $appPoolPath -Name recycling.periodicRestart.time -Value ([TimeSpan]::FromMinutes(0))
+        Write-Message "AppPool settings for Publishing Server Application Initialization complete." "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+
+    }
+}
+
+function Enable-ApplicationInitializationWebsiteSettings
+{
+    [CmdletBinding()]
+    param
+    (
+        [Parameter(Mandatory=$true)]
+        [string]$siteName
+    )
+
+    if(Test-ApplicationInitializationSetting)
+    {
+        $site = Join-Path 'IIS:\Sites\' -ChildPath $siteName
+        Set-ItemProperty $site -Name applicationDefaults.preloadEnabled -Value $true
+
+    }
+}
+
 function Initialize-WebSite
 {
     Write-Message "`nInitializing site in IIS..." "Green" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
@@ -2065,6 +2128,8 @@ function Initialize-WebSite
         }
 
         $pool | Set-Item
+
+        Enable-ApplicationInitializationAppPoolSettings $appPoolName
     }
 
     # Create IIS site
@@ -2462,6 +2527,31 @@ function Disable-SitecoreVersionPage
     }
 }
 
+function Disable-SitecoreAnalytics
+{
+    param
+    (
+        [System.Collections.Generic.List[string]]$backupfiles
+    )
+    if(Test-PublishingServerRole)
+    {
+        $xdbConfigPath = Join-Path $script:configSettings.WebServer.SitecoreInstallPath -ChildPath "\Website\App_Config\Include\Sitecore.Xdb.config"
+        $xdbConfig = [xml](Get-Content $xdbConfigPath)
+
+        $currentDate = (Get-Date).ToString("yyyyMMdd_hh-mm-s")
+        $backup = [string]$xdbConfigPath + "__$currentDate"
+        $xdbConfig.Save($backup)
+        $backupFiles.Add($backup) | Out-Null
+
+        $xdbConfig.configuration.sitecore.settings.SelectSingleNode("setting[@name='Xdb.Enabled']").SetAttribute("value", $false.ToString().ToLower()) | Out-Null
+        $xdbConfig.configuration.sitecore.settings.SelectSingleNode("setting[@name='Xdb.Tracking.Enabled']").SetAttribute("value", $false.ToString().ToLower()) | Out-Null
+        $xdbConfig.Save($xdbConfigPath)
+        Write-Message "Disabled Sitecore Analytics for publishing server" "White" -WriteToLogOnly $TRUE -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+    }
+
+    return $backupfiles
+}
+
 function Get-FilesToEnableOnPublishingServer
 {
     $webrootPath = Join-Path $script:configSettings.WebServer.SitecoreInstallPath -ChildPath "Website"
@@ -2732,6 +2822,40 @@ function Set-ConfigurationFiles
     {
         $node = $webconfig.configuration.SelectSingleNode("system.webServer/modules/add[@name='SitecoreAntiCSRF']")
         $node.ParentNode.InnerXml = $node.ParentNode.InnerXml.Replace($node.OuterXml, $node.OuterXml.Insert(0, "<!--").Insert($node.OuterXml.Length+4, "-->"))
+    }
+
+    # Set ApplicationInitialization for Publishing Server
+    if(Test-ApplicationInitializationSetting)
+    {        
+        $node = $webConfig.configuration.'system.webServer'.applicationInitialization
+
+        if($node -eq $null) 
+        {
+            $publishingHost = $script:configSettings.webServer.CMServerSettings.Publishing.PublishingInstance
+            $add = $webconfig.CreateElement("add")
+            $add.SetAttribute("hostName", $publishingHost) | Out-Null
+            $add.SetAttribute("initializationPage","/default.aspx") | Out-Null
+            $appInit = $webconfig.CreateElement("applicationInitialization")
+            $appInit.SetAttribute("doAppInitAfterRestart","true")  | Out-Null
+            $appInit.AppendChild($add)  | Out-Null
+            $webconfig.configuration.SelectSingleNode("system.webServer").AppendChild($appInit) | Out-Null
+            $webconfig.Save($webConfigPath)
+        }
+
+        $node = $webConfig.configuration.'system.webServer'.defaultDocument
+
+        if($node -eq $null)
+        {
+            $add = $webconfig.CreateElement("add")
+            $add.SetAttribute("value","default.aspx") | Out-Null
+            $files = $webconfig.CreateElement("files")
+            $files.AppendChild($add) | Out-Null
+            $defaultDocument = $webconfig.CreateElement("defaultDocument")
+            $defaultDocument.SetAttribute("enabled","true")
+            $defaultDocument.AppendChild($files) | Out-Null
+            $webconfig.configuration.SelectSingleNode("system.webServer").AppendChild($defaultDocument) | Out-Null
+            $webconfig.Save($webConfigPath)
+        }
     }
 
     Write-Message "Saving changes to Web.config" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
@@ -3127,6 +3251,7 @@ function Set-ConfigurationFiles
         if (Test-PublishingServerRole)
         {
             Enable-FilesForPublishingServer
+            $backupFiles = Disable-SitecoreAnalytics $backupFiles
 
             if ($script:configSettings.WebServer.CMServerSettings.Publishing.Parallel.Enabled)
             {
@@ -3328,6 +3453,12 @@ function Set-SecuritySettings([string]$iisSiteName)
         }
     }
     
+    if(Test-PublishingServerRole)
+    {
+        Enable-ApplicationInitializationWebsiteSettings $iisSiteName    
+        Set-IpRestrictions $iisSiteName
+    }
+
     Write-Message "Security settings complete!" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
 }
 
