@@ -606,11 +606,11 @@ function New-ConfigSettings([xml]$config)
         $serverAddress = $serverAddress.Trim()
     }
 
-    $sqlPackageDir = $config.InstallSettings.Database.SQLPackagePath
-    $sqlEdition = $config.InstallSettings.Database.SQLEdition
-    $sqlSize = $config.InstallSettings.Database.SQLMaxSize
-    $sqlObjective = $config.InstallSettings.Database.SQLServiceObjective
-    $sqlResourceGroup = $config.Installsettings.Database.SQLResourceGroup
+    $sqlPackageDir = $config.InstallSettings.Database.Azure.SQLPackagePath
+    $sqlEdition = $config.InstallSettings.Database.Azure.SQLEdition
+    $sqlSize = $config.InstallSettings.Database.Azure.SQLMaxSize
+    $sqlObjective = $config.InstallSettings.Database.Azure.SQLServiceObjective
+    $sqlResourceGroup = $config.Installsettings.Database.Azure.SQLResourceGroup
 
     $azure | Add-Member -MemberType NoteProperty -Name ServerAddress -Value $serverAddress
     $azure | Add-Member -MemberType NoteProperty -Name SqlPackagePath -Value $sqlPackageDir
@@ -1748,91 +1748,97 @@ function Copy-DatabaseFiles([string]$zipPath)
     $item = Find-FolderInZipFile $shell.NameSpace($zipPath).Items() "Databases"
     $dacItem = Find-FolderInZipFile $shell.NameSpace($zipPath).Items() "DACPAC"
 
-    foreach($childItem in $shell.NameSpace($dacItem.Path).Items())
+    if ($script:configSettings.Database.Type = "Azure")
     {
-        if ($childItemName -eq "Sitecore.Analytics.dacpac")
+        foreach($childItem in $shell.NameSpace($dacItem.Path).Items())
         {
-            $fileName = "Sitecore.Reporting.dacpac"
-        }
-
-        $destinationFolderPath = $dataFilesFolderPath
-        $destinationFolderPath = Join-Path $dataFilesFolderPath -ChildPath "DACPAC"
-        $filePath = Join-Path $destinationFolderPath -ChildPath $fileName
-
-        if (Test-Path $filePath)
-        {
-            Write-Message "$filePath already exists, skipping extraction" "Yellow" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
-        }
-        else
-        {
-            $shell.NameSpace($destinationFolderPath).CopyHere($childItem)
-
-            if ($childItemName.ToLower() -like "sitecore.web.*")
+            if ($childItemName -eq "Sitecore.Analytics.dacpac")
             {
-                # Make copies of the web Database as required
-                foreach ($copy in $script:configSettings.Database.WebDatabaseCopies)
-                {
-                    $copyFilePath = Join-Path $destinationFolderPath -ChildPath (Get-SubstituteDatabaseFileName $childItemName $copy.Name)
-                    Copy-Item $filePath $copyFilePath
-                }
+                $fileName = "Sitecore.Reporting.dacpac"
             }
 
-            # Rename Analytics database files to Reporting
-            if ($childItemName.ToLower() -like "sitecore.analytics.*")
+            $destinationFolderPath = $dataFilesFolderPath
+            $destinationFolderPath = Join-Path $dataFilesFolderPath -ChildPath "DACPAC"
+            $filePath = Join-Path $destinationFolderPath -ChildPath $fileName
+
+            if (Test-Path $filePath)
             {
-                Rename-Item "$destinationFolderPath\$($childItemName)" (Get-SubstituteDatabaseFileName $childItemName "Reporting")
+                Write-Message "$filePath already exists, skipping extraction" "Yellow" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+            }
+            else
+            {
+                $shell.NameSpace($destinationFolderPath).CopyHere($childItem)
+
+                if ($childItemName.ToLower() -like "sitecore.web.*")
+                {
+                    # Make copies of the web Database as required
+                    foreach ($copy in $script:configSettings.Database.WebDatabaseCopies)
+                    {
+                        $copyFilePath = Join-Path $destinationFolderPath -ChildPath (Get-SubstituteDatabaseFileName $childItemName $copy.Name)
+                        Copy-Item $filePath $copyFilePath
+                    }
+                }
+
+                # Rename Analytics database files to Reporting
+                if ($childItemName.ToLower() -like "sitecore.analytics.*")
+                {
+                    Rename-Item "$destinationFolderPath\$($childItemName)" (Get-SubstituteDatabaseFileName $childItemName "Reporting")
+                }
             }
         }
     }
 
-    foreach($childItem in $shell.NameSpace($item.Path).Items())
+    if ($script:configSettings.Database.Type -ne "Azure")
     {
-        $childItemName = Split-Path -Path $childItem.Path -Leaf
+        foreach($childItem in $shell.NameSpace($item.Path).Items())
+        {
+            $childItemName = Split-Path -Path $childItem.Path -Leaf
 
-        # Rename SQL Analytics database files to avoid confusion
-        if ($childItemName -eq "Sitecore.Analytics.ldf")
-        {
-            $fileName = "Sitecore.Reporting.ldf"
-        }
-        elseif ($childItemName -eq "Sitecore.Analytics.mdf")
-        {
-            $fileName = "Sitecore.Reporting.mdf"
-        }
-        else
-        {
-            $fileName = $childItemName
-        }
-        
-        $destinationFolderPath = $dataFilesFolderPath
-        if ($childItemName.EndsWith(".ldf"))
-        {
-            $destinationFolderPath = $logFilesFolderPath
-        }
-
-        $filePath = Join-Path $destinationFolderPath -ChildPath $fileName
-
-        if (Test-Path $filePath)
-        {
-            Write-Message "$filePath already exists, skipping extraction" "Yellow" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
-        }
-        else
-        {
-            $shell.NameSpace($destinationFolderPath).CopyHere($childItem)
-
-            if ($childItemName.ToLower() -like "sitecore.web.*")
+            # Rename SQL Analytics database files to avoid confusion
+            if ($childItemName -eq "Sitecore.Analytics.ldf")
             {
-                # Make copies of the web Database as required
-                foreach ($copy in $script:configSettings.Database.WebDatabaseCopies)
-                {
-                    $copyFilePath = Join-Path $destinationFolderPath -ChildPath (Get-SubstituteDatabaseFileName $childItemName $copy.Name)
-                    Copy-Item $filePath $copyFilePath
-                }
+                $fileName = "Sitecore.Reporting.ldf"
+            }
+            elseif ($childItemName -eq "Sitecore.Analytics.mdf")
+            {
+                $fileName = "Sitecore.Reporting.mdf"
+            }
+            else
+            {
+                $fileName = $childItemName
+            }
+        
+            $destinationFolderPath = $dataFilesFolderPath
+            if ($childItemName.EndsWith(".ldf"))
+            {
+                $destinationFolderPath = $logFilesFolderPath
             }
 
-            # Rename Analytics database files to Reporting
-            if ($childItemName.ToLower() -like "sitecore.analytics.*")
+            $filePath = Join-Path $destinationFolderPath -ChildPath $fileName
+
+            if (Test-Path $filePath)
             {
-                Rename-Item "$destinationFolderPath\$($childItemName)" (Get-SubstituteDatabaseFileName $childItemName "Reporting")
+                Write-Message "$filePath already exists, skipping extraction" "Yellow" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+            }
+            else
+            {
+                $shell.NameSpace($destinationFolderPath).CopyHere($childItem)
+
+                if ($childItemName.ToLower() -like "sitecore.web.*")
+                {
+                    # Make copies of the web Database as required
+                    foreach ($copy in $script:configSettings.Database.WebDatabaseCopies)
+                    {
+                        $copyFilePath = Join-Path $destinationFolderPath -ChildPath (Get-SubstituteDatabaseFileName $childItemName $copy.Name)
+                        Copy-Item $filePath $copyFilePath
+                    }
+                }
+
+                # Rename Analytics database files to Reporting
+                if ($childItemName.ToLower() -like "sitecore.analytics.*")
+                {
+                    Rename-Item "$destinationFolderPath\$($childItemName)" (Get-SubstituteDatabaseFileName $childItemName "Reporting")
+                }
             }
         }
     }
