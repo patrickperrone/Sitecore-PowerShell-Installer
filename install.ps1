@@ -515,6 +515,14 @@ function New-ConfigSettings([xml]$config)
     {
         $adminPassword = $adminPassword.Trim()
     }
+    $cmServerSettings | Add-Member -MemberType NoteProperty -Name AddTelerikEncryptionKey -Value $FALSE
+    $telerikEncryptionKey = $config.InstallSettings.WebServer.CMServerSettings.TelerikEncryptionKey
+    if (!([string]::IsNullOrEmpty($telerikEncryptionKey)))
+    {
+        $telerikEncryptionKey = $telerikEncryptionKey.Trim()
+        $cmServerSettings.AddTelerikEncryptionKey = $TRUE
+    }
+    $cmServerSettings | Add-Member -MemberType NoteProperty -Name TelerikEncryptionKey -Value $telerikEncryptionKey
     $cmServerSettings | Add-Member -MemberType NoteProperty -Name Enabled -Value (Get-ConfigOption $config "WebServer/CMServerSettings/enabled" $TRUE)
     $cmServerSettings | Add-Member -MemberType NoteProperty -Name DefaultSitecoreAdminPassword -Value $adminPassword
     $cmServerSettings | Add-Member -MemberType NoteProperty -Name Publishing -Value $publishing
@@ -532,6 +540,7 @@ function New-ConfigSettings([xml]$config)
     $cdServerSettings | Add-Member -MemberType NoteProperty -Name DisableUploadWatcher -Value (Get-ConfigOption $config "WebServer/CDServerSettings/DisableUploadWatcher")
     $cdServerSettings | Add-Member -MemberType NoteProperty -Name DisableExperienceAnalyticsAssemblies -Value (Get-ConfigOption $config "WebServer/CDServerSettings/DisableExperienceAnalyticsAssemblies")
     $cdServerSettings | Add-Member -MemberType NoteProperty -Name RemovePhantomJs -Value (Get-ConfigOption $config "WebServer/CDServerSettings/RemovePhantomJs")
+    $cdServerSettings | Add-Member -MemberType NoteProperty -Name DisableTelerikControls -Value (Get-ConfigOption $config "WebServer/CDServerSettings/DisableTelerikControls")
     #endregion
 
     #region MediaRequestProtection
@@ -2783,11 +2792,35 @@ function Set-ConfigurationFiles
         Write-Message "Changing private session state provider to MSSQL" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     }
 
+    # Add Telerik Encryption
+    if (($script:configSettings.Webserver.CMServerSettings.Enabled) -and ($script:configSettings.Webserver.CMServerSettings.AddTelerikEncryptionKey))
+    {
+        $key = $webconfig.CreateElement("add")
+        $key.SetAttribute("key", "Telerik.AsyncUpload.ConfigurationEncryptionKey")
+        $key.SetAttribute("value", $script:configSettings.Webserver.CMServerSettings.TelerikEncryptionKey)
+        $webconfig.configuration.SelectSingleNode("appSettings").AppendChild($key) | Out-Null
+        Write-Message "Set Telerik Configuration Encryption Key on CM Server" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+    }
+
     # Disable Sitecore's Upload Watcher
-    if ($script:configSettings.WebServer.CDServerSettings.DisableUploadWatcher)
+    if (($script:configSettings.Webserver.CDServerSettings.Enabled) -and ($script:configSettings.WebServer.CDServerSettings.DisableUploadWatcher))
     {
         $node = $webconfig.configuration.SelectSingleNode("system.webServer/modules/add[@name='SitecoreUploadWatcher']")
         $node.ParentNode.InnerXml = $node.ParentNode.InnerXml.Replace($node.OuterXml, $node.OuterXml.Insert(0, "<!--").Insert($node.OuterXml.Length+4, "-->"))
+    }
+
+    # Disable Telerik Controls
+    if (($script:configSettings.Webserver.CDServerSettings.Enabled) -and ($script:configSettings.WebServer.CDServerSettings.DisableTelerikControls))
+    {
+        $node = $webconfig.configuration.SelectSingleNode("system.webServer/handlers/add[@name='Telerik_Web_UI_DialogHandler_aspx']")
+        $webconfig.configuration.SelectSingleNode("system.webServer/handlers").RemoveChild($node) | Out-Null
+        
+        $node = $webconfig.configuration.SelectSingleNode("system.webServer/handlers/add[@name='Telerik_Web_UI_SpellCheckHandler_axd']")
+        $webconfig.configuration.SelectSingleNode("system.webServer/handlers").RemoveChild($node) | Out-Null
+        
+        $node = $webconfig.configuration.SelectSingleNode("system.webServer/handlers/add[@name='Telerik_Web_UI_WebResource_axd']")
+        $webconfig.configuration.SelectSingleNode("system.webServer/handlers").RemoveChild($node) | Out-Null
+        Write-Message "Disabled Telerik Handlers for CD Server" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     }
     
     # Modify license file path
