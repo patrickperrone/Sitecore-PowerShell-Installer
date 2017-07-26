@@ -25,6 +25,15 @@ The Sitecore-PowerShell-Installer script enables you to install Production-ready
   - Description: https://msdn.microsoft.com/en-us/library/hh245198.aspx
   - Install Instructions: http://guidestomicrosoft.com/2015/01/13/install-sql-server-powershell-module-sqlps/
 - ImportExcel PowerShell Module: used to process Sitecore's Config Enable/Disable [spreadsheet](https://doc.sitecore.net/sitecore_experience_platform/setting_up_and_maintaining/xdb/configuring_servers/server_configuration_resources)
+	- Install-Module -Name ImportExcel
+- If using AzureSQL the following should also be installed on the machine running the script: 
+	- [DacFx](https://www.microsoft.com/en-us/download/confirmation.aspx?id=55255)
+	- The following packages from the [SQL Server Feature Pack](https://www.microsoft.com/en-us/download/details.aspx?id=52676)
+		- SQLSysClrTypes.msi
+		- SharedManagementObjects.msi
+		- PowerShellTools.msi
+	- Install-Module -Name AzureRM.sql
+ 
 
 ### Requirements
 - SQL logins must exist prior to running script

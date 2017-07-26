@@ -515,6 +515,14 @@ function New-ConfigSettings([xml]$config)
     {
         $adminPassword = $adminPassword.Trim()
     }
+    $cmServerSettings | Add-Member -MemberType NoteProperty -Name AddTelerikEncryptionKey -Value $FALSE
+    $telerikEncryptionKey = $config.InstallSettings.WebServer.CMServerSettings.TelerikEncryptionKey
+    if (!([string]::IsNullOrEmpty($telerikEncryptionKey)))
+    {
+        $telerikEncryptionKey = $telerikEncryptionKey.Trim()
+        $cmServerSettings.AddTelerikEncryptionKey = $TRUE
+    }
+    $cmServerSettings | Add-Member -MemberType NoteProperty -Name TelerikEncryptionKey -Value $telerikEncryptionKey
     $cmServerSettings | Add-Member -MemberType NoteProperty -Name Enabled -Value (Get-ConfigOption $config "WebServer/CMServerSettings/enabled" $TRUE)
     $cmServerSettings | Add-Member -MemberType NoteProperty -Name DefaultSitecoreAdminPassword -Value $adminPassword
     $cmServerSettings | Add-Member -MemberType NoteProperty -Name Publishing -Value $publishing
@@ -531,8 +539,8 @@ function New-ConfigSettings([xml]$config)
     $cdServerSettings | Add-Member -MemberType NoteProperty -Name DenyExecutePermission -Value (Get-ConfigOption $config "WebServer/CDServerSettings/DenyExecutePermission")
     $cdServerSettings | Add-Member -MemberType NoteProperty -Name DisableUploadWatcher -Value (Get-ConfigOption $config "WebServer/CDServerSettings/DisableUploadWatcher")
     $cdServerSettings | Add-Member -MemberType NoteProperty -Name DisableExperienceAnalyticsAssemblies -Value (Get-ConfigOption $config "WebServer/CDServerSettings/DisableExperienceAnalyticsAssemblies")
-    $cdServerSettings | Add-Member -MemberType NoteProperty -Name DisableSitecoreVersionPage -Value (Get-ConfigOption $config "WebServer/CDServerSettings/DisableSitecoreVersionPage")
     $cdServerSettings | Add-Member -MemberType NoteProperty -Name RemovePhantomJs -Value (Get-ConfigOption $config "WebServer/CDServerSettings/RemovePhantomJs")
+    $cdServerSettings | Add-Member -MemberType NoteProperty -Name DisableTelerikControls -Value (Get-ConfigOption $config "WebServer/CDServerSettings/DisableTelerikControls")
     #endregion
 
     #region MediaRequestProtection
@@ -595,6 +603,31 @@ function New-ConfigSettings([xml]$config)
     }
 
     $solr | Add-Member -MemberType NoteProperty -Name ServiceBaseAddress -Value $serviceBaseAddress
+    #endregion
+
+    #region AzureConfig
+    $azure = New-Object -TypeName PSObject
+
+    $serverAddress = $config.InstallSettings.Database.SqlServerName
+    if (!([string]::IsNullOrEmpty($serverAddress)))
+    {
+        $serverAddress = $serverAddress.Trim()
+    }
+
+    $sqlPackageDir = $config.InstallSettings.Database.Azure.SQLPackagePath
+    $sqlEdition = $config.InstallSettings.Database.Azure.SQLEdition
+    $sqlSize = $config.InstallSettings.Database.Azure.SQLMaxSize
+    $sqlObjective = $config.InstallSettings.Database.Azure.SQLServiceObjective
+    $sqlResourceGroup = $config.Installsettings.Database.Azure.SQLResourceGroup
+
+    $azure | Add-Member -MemberType NoteProperty -Name ServerAddress -Value $serverAddress
+    $azure | Add-Member -MemberType NoteProperty -Name SqlPackagePath -Value $sqlPackageDir
+    $azure | Add-Member -MemberType NoteProperty -Name Edition -Value $sqlEdition
+    $azure | Add-Member -MemberType NoteProperty -Name MaxSize -Value $sqlSize
+    $azure | Add-Member -MemberType NoteProperty -Name ServiceObjective -Value $sqlObjective
+    $azure | Add-Member -MemberType NoteProperty -Name ResourceGroup -Value $sqlResourceGroup
+
+    
     #endregion
 
     #region MongoDb
@@ -713,6 +746,7 @@ function New-ConfigSettings([xml]$config)
     $webserver | Add-Member -MemberType NoteProperty -Name IPWhiteList -Value $ipWhiteList
     $webserver | Add-Member -MemberType NoteProperty -Name SessionStateProvider -Value $sessionStateProvider
     $webserver | Add-Member -MemberType NoteProperty -Name Solr -Value $solr
+    $webserver | Add-Member -MemberType NoteProperty -Name Azure -Value $azure
     $webserver | Add-Member -MemberType NoteProperty -Name MongoDb -Value $mongodb
     $webserver | Add-Member -MemberType NoteProperty -Name MediaRequestProtection -Value $mediaRequestProtection
     #endregion
@@ -733,6 +767,7 @@ function New-ConfigSettings([xml]$config)
 
         $db | Add-Member -MemberType NoteProperty -Name Name -Value $name
         $db | Add-Member -MemberType NoteProperty -Name ConnectionStringName -Value $name.ToLower()
+        $db | Add-Member -MemberType NoteProperty -Name Type -Value $config.InstallSettings.Database.type
         $databases.Add($db)
     }
     #endregion
@@ -840,6 +875,14 @@ function New-ConfigSettings([xml]$config)
     {
         $databaseNamePrefix = $databaseNamePrefix.Trim()
     }
+
+
+    $databaseType = $config.InstallSettings.Database.type
+    if (!([string]::IsNullOrEmpty($databaseType)))
+    {
+        $databaseType = $databaseType.Trim()
+    }
+
     
     $database | Add-Member -MemberType NoteProperty -Name Enabled -Value (Get-ConfigOption $config "Database/enabled" $TRUE)
     $database | Add-Member -MemberType NoteProperty -Name InstallDatabase -Value (Get-ConfigOption $config "Database/InstallDatabase")
@@ -853,6 +896,7 @@ function New-ConfigSettings([xml]$config)
     $database | Add-Member -MemberType NoteProperty -Name UseWindowsAuthenticationForSqlDataAccess -Value (Get-ConfigOption $config "Database/UseWindowsAuthenticationForSqlDataAccess")
     $database | Add-Member -MemberType NoteProperty -Name DatabaseInstallPath -Value $databaseInstallPath
     $database | Add-Member -MemberType NoteProperty -Name DatabaseNamePrefix -Value $databaseNamePrefix
+    $database | Add-Member -MemberType NoteProperty -Name Type -Value $databaseType
     #endregion
 
     $script:configSettings = New-Object -TypeName PSObject
@@ -879,6 +923,7 @@ function New-ConfigSettings([xml]$config)
     $script:configSettings | Add-Member -MemberType NoteProperty -Name SuppressPrompts -Value (Get-ConfigOption $config "SuppressPrompts")
     $script:configSettings | Add-Member -MemberType NoteProperty -Name WebServer -Value $webserver
     $script:configSettings | Add-Member -MemberType NoteProperty -Name Database -Value $database
+    $script:configSettings | Add-Member -MemberType NoteProperty -Name Azure -Value $azure
 }
 #endregion
 
@@ -928,6 +973,20 @@ function Test-PreRequisites
         else
         {
             Set-Location -Path $scriptDir
+        }
+
+        if($script:configSettings.Database.Type = "Azure")
+        {
+            $moduleName = "AzureRM.sql"
+            if (!(Test-Module $moduleName))
+            {
+                Write-Message "Warning: SQL PowerShell Module ($moduleName) is not installed." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+                return $FALSE
+            }
+            else
+            {
+                Set-Location -Path $scriptDir
+            }
         }
     }
 
@@ -1024,6 +1083,7 @@ function Test-SqlConnectionAndRoles
 
 function Test-SqlPermissionForPath([string]$path)
 {
+
     # Check that SQL has correct rights over install path, else Database Attach will fail
     [Microsoft.SqlServer.Management.Smo.Server]$sqlServerSmo = Get-SqlServerSmo        
     $user = $sqlServerSmo.SqlDomainGroup
@@ -1540,14 +1600,13 @@ function Test-ConfigurationSettings
             return $FALSE
         }
 
-        if ($script:configSettings.Database.InstallDatabase)
+        if ($script:configSettings.Database.InstallDatabase -and $script:configSettings.Database.Type -ne "Azure")
         {
             if ([string]::IsNullOrEmpty($script:configSettings.Database.DatabaseInstallPath.DataFiles.Local))
             {
                 Write-Message "DatabaseInstallPath.Local cannot be null or empty" "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
                 return $FALSE
             }
-
 
             if (!(Test-SqlInstallPaths))
             {
@@ -1561,11 +1620,13 @@ function Test-ConfigurationSettings
             Write-Message "The specified combination of accounts will not produce a valid SQL login for data access." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
             return $FALSE
         }
-
-        if(!(Test-SqlConnectionAndRoles))
+        if ($script:configSettings.Database.Type -ne "Azure")
         {
-            Write-Message "A problem has been detected with the SQL connection." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
-            return $FALSE
+            if(!(Test-SqlConnectionAndRoles))
+            {
+                Write-Message "A problem has been detected with the SQL connection." "Red" -WriteToLog $FALSE -HostConsoleAvailable $hostScreenAvailable
+                return $FALSE
+            }
         }
     }
 
@@ -1693,54 +1754,99 @@ function Copy-DatabaseFiles([string]$zipPath)
 
     $shell = New-Object -com shell.application
     $item = Find-FolderInZipFile $shell.NameSpace($zipPath).Items() "Databases"
-    foreach($childItem in $shell.NameSpace($item.Path).Items())
+    $dacItem = Find-FolderInZipFile $shell.NameSpace($zipPath).Items() "DACPAC"
+
+    if ($script:configSettings.Database.Type = "Azure")
     {
-        $childItemName = Split-Path -Path $childItem.Path -Leaf
-
-        # Rename SQL Analytics database files to avoid confusion
-        if ($childItemName -eq "Sitecore.Analytics.ldf")
+        foreach($childItem in $shell.NameSpace($dacItem.Path).Items())
         {
-            $fileName = "Sitecore.Reporting.ldf"
-        }
-        elseif ($childItemName -eq "Sitecore.Analytics.mdf")
-        {
-            $fileName = "Sitecore.Reporting.mdf"
-        }
-        else
-        {
-            $fileName = $childItemName
-        }
-        
-        $destinationFolderPath = $dataFilesFolderPath
-        if ($childItemName.EndsWith(".ldf"))
-        {
-            $destinationFolderPath = $logFilesFolderPath
-        }
-
-        $filePath = Join-Path $destinationFolderPath -ChildPath $fileName
-
-        if (Test-Path $filePath)
-        {
-            Write-Message "$filePath already exists, skipping extraction" "Yellow" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
-        }
-        else
-        {
-            $shell.NameSpace($destinationFolderPath).CopyHere($childItem)
-
-            if ($childItemName.ToLower() -like "sitecore.web.*")
+            if ($childItemName -eq "Sitecore.Analytics.dacpac")
             {
-                # Make copies of the web Database as required
-                foreach ($copy in $script:configSettings.Database.WebDatabaseCopies)
-                {
-                    $copyFilePath = Join-Path $destinationFolderPath -ChildPath (Get-SubstituteDatabaseFileName $childItemName $copy.Name)
-                    Copy-Item $filePath $copyFilePath
-                }
+                $fileName = "Sitecore.Reporting.dacpac"
             }
 
-            # Rename Analytics database files to Reporting
-            if ($childItemName.ToLower() -like "sitecore.analytics.*")
+            $destinationFolderPath = $dataFilesFolderPath
+            $destinationFolderPath = Join-Path $dataFilesFolderPath -ChildPath "DACPAC"
+            $filePath = Join-Path $destinationFolderPath -ChildPath $fileName
+
+            if (Test-Path $filePath)
             {
-                Rename-Item "$destinationFolderPath\$($childItemName)" (Get-SubstituteDatabaseFileName $childItemName "Reporting")
+                Write-Message "$filePath already exists, skipping extraction" "Yellow" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+            }
+            else
+            {
+                $shell.NameSpace($destinationFolderPath).CopyHere($childItem)
+
+                if ($childItemName.ToLower() -like "sitecore.web.*")
+                {
+                    # Make copies of the web Database as required
+                    foreach ($copy in $script:configSettings.Database.WebDatabaseCopies)
+                    {
+                        $copyFilePath = Join-Path $destinationFolderPath -ChildPath (Get-SubstituteDatabaseFileName $childItemName $copy.Name)
+                        Copy-Item $filePath $copyFilePath
+                    }
+                }
+
+                # Rename Analytics database files to Reporting
+                if ($childItemName.ToLower() -like "sitecore.analytics.*")
+                {
+                    Rename-Item "$destinationFolderPath\$($childItemName)" (Get-SubstituteDatabaseFileName $childItemName "Reporting")
+                }
+            }
+        }
+    }
+
+    if ($script:configSettings.Database.Type -ne "Azure")
+    {
+        foreach($childItem in $shell.NameSpace($item.Path).Items())
+        {
+            $childItemName = Split-Path -Path $childItem.Path -Leaf
+
+            # Rename SQL Analytics database files to avoid confusion
+            if ($childItemName -eq "Sitecore.Analytics.ldf")
+            {
+                $fileName = "Sitecore.Reporting.ldf"
+            }
+            elseif ($childItemName -eq "Sitecore.Analytics.mdf")
+            {
+                $fileName = "Sitecore.Reporting.mdf"
+            }
+            else
+            {
+                $fileName = $childItemName
+            }
+        
+            $destinationFolderPath = $dataFilesFolderPath
+            if ($childItemName.EndsWith(".ldf"))
+            {
+                $destinationFolderPath = $logFilesFolderPath
+            }
+
+            $filePath = Join-Path $destinationFolderPath -ChildPath $fileName
+
+            if (Test-Path $filePath)
+            {
+                Write-Message "$filePath already exists, skipping extraction" "Yellow" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+            }
+            else
+            {
+                $shell.NameSpace($destinationFolderPath).CopyHere($childItem)
+
+                if ($childItemName.ToLower() -like "sitecore.web.*")
+                {
+                    # Make copies of the web Database as required
+                    foreach ($copy in $script:configSettings.Database.WebDatabaseCopies)
+                    {
+                        $copyFilePath = Join-Path $destinationFolderPath -ChildPath (Get-SubstituteDatabaseFileName $childItemName $copy.Name)
+                        Copy-Item $filePath $copyFilePath
+                    }
+                }
+
+                # Rename Analytics database files to Reporting
+                if ($childItemName.ToLower() -like "sitecore.analytics.*")
+                {
+                    Rename-Item "$destinationFolderPath\$($childItemName)" (Get-SubstituteDatabaseFileName $childItemName "Reporting")
+                }
             }
         }
     }
@@ -1789,7 +1895,7 @@ function Copy-SitecoreFiles
 
     if ($script:configSettings.Database.Enabled -and $script:configSettings.Database.InstallDatabase)
     {
-        Copy-DatabaseFiles $zipPath
+            Copy-DatabaseFiles $zipPath
     }
     else
     {
@@ -1816,6 +1922,18 @@ function Copy-SitecoreFiles
 
 function Attach-SitecoreDatabase([string]$databaseName, [Microsoft.SqlServer.Management.Smo.Server]$sqlServerSmo)
 {
+    $sqlpackage = $script:configSettings.Azure.SqlPackagePath
+    
+    $dbserver = $script:configSettings.Azure.ServerAddress
+    $dbResourceGroup = $script:configSettings.Azure.ResourceGroup
+    $dbEdition = $script:configSettings.Azure.Edition #None, Premium, Basic, Standard, DataWarehouse, Stretch, Free, PremiumRS
+    $dbSize = $script:configSettings.Azure.MaxSize 
+    $dbServiceObjective = $script:configSettings.Azure.ServiceObjective 
+
+
+    $dbuser = $script:configSettings.Database.SqlLoginForInstall
+    $dbpass = $script:configSettings.Database.SqlLoginForInstallPassword
+
     $fullDatabaseName = $script:configSettings.Database.DatabaseNamePrefix + $databaseName
 
     if (!$script:configSettings.Database.InstallDatabase)
@@ -1823,39 +1941,48 @@ function Attach-SitecoreDatabase([string]$databaseName, [Microsoft.SqlServer.Man
         Write-Message "Skipping database attach: InstallDatabase option is false" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
         return $fullDatabaseName
     }
-
-    if ($sqlServerSmo.databases[$fullDatabaseName] -eq $null)
+    
+    if ($type = "Azure")
     {
-        $message = "Attaching database $fullDatabaseName to " + $sqlServerSmo.Name
-        Write-Message $message "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
-
-        # Get paths of the data and log file
         $dataFilesFolderPath = Get-DatabaseInstallFolderPath -FileType DataFiles -LocalPath
-        $logFilesFolderPath = Get-DatabaseInstallFolderPath -FileType LogFiles -LocalPath
-
-        $dataFilePath = Join-Path $dataFilesFolderPath -ChildPath "Sitecore.$databaseName.mdf"
-        $logFilePath = [IO.Path]::Combine( $logFilesFolderPath, "Sitecore.$databaseName.ldf" )
-		
-        $files = New-Object System.Collections.Specialized.StringCollection 
-        $files.Add($dataFilePath) | Out-Null
-        $files.Add($logFilePath) | Out-Null
-
-        # Try attaching
-        try
-        {
-            $sqlServerSmo.AttachDatabase($fullDatabaseName, $files)
-        }
-        catch
-        {
-            Write-Message ($_.Exception) "Red" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
-        }
+        $mydacpac = Join-Path $dataFilesFolderPath -ChildPath "DACPAC/Sitecore.$databaseName.dacpac"
+        # New-AzureRmSqlDatabase -ResourceGroupName $dbResourceGroup -ServerName $dbserver -DatabaseName $fullDatabaseName -MaxSizeBytes $dbSize -Edition $dbEdition -RequestedServiceObjectiveName $dbServiceObjective
+        & $sqlpackage /Action:Publish /tsn:tcp:$dbServer /tdn:$fullDatabaseName /sf:$mydacpac /tu:$dbuser /tp:$dbpass /p:AllowIncompatiblePlatform=true
     }
     else
     {
-        $message = "Database $fullDatabaseName already exists on " + $sqlServerSmo.Name
-        Write-Message $message "Yellow" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
-    }
+        if ($sqlServerSmo.databases[$fullDatabaseName] -eq $null)
+        {
+            # Try attaching
+            try
+            {
+                $message = "Attaching database $fullDatabaseName to " + $sqlServerSmo.Name
+                Write-Message $message "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
 
+                # Get paths of the data and log file
+                $dataFilesFolderPath = Get-DatabaseInstallFolderPath -FileType DataFiles -LocalPath
+                $logFilesFolderPath = Get-DatabaseInstallFolderPath -FileType LogFiles -LocalPath
+
+                $dataFilePath = Join-Path $dataFilesFolderPath -ChildPath "Sitecore.$databaseName.mdf"
+                $logFilePath = [IO.Path]::Combine( $logFilesFolderPath, "Sitecore.$databaseName.ldf" )
+		
+                $files = New-Object System.Collections.Specialized.StringCollection 
+                $files.Add($dataFilePath) | Out-Null
+                $files.Add($logFilePath) | Out-Null
+                $sqlServerSmo.AttachDatabase($fullDatabaseName, $files)
+            
+            }
+            catch
+            {
+                Write-Message ($_.Exception) "Red" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+            }
+        }
+        else
+        {
+            $message = "Database $fullDatabaseName already exists on " + $sqlServerSmo.Name
+            Write-Message $message "Yellow" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+        }
+    }
     return $fullDatabaseName
 }
 
@@ -1979,8 +2106,11 @@ function Initialize-SitecoreDatabases
     foreach ($dbname in $databaseNames)
     {
         $fullDatabaseName = Attach-SitecoreDatabase $dbname $sqlServerSmo
+        if ($script:configSettings.Database.Type -ne "Azure")
+        {
         Set-DatabaseRoles $fullDatabaseName $sqlServerSmo
         Grant-DatabasePermissions $fullDatabaseName $sqlServerSmo
+        }
     }
     
     if (Test-ShouldSetAutogrowth)
@@ -2508,25 +2638,6 @@ function Disable-ExperienceAnalyticsAssemblies
     }
 }
 
-function Disable-SitecoreVersionPage
-{
-    $webrootPath = Join-Path $script:configSettings.WebServer.SitecoreInstallPath -ChildPath "Website"
-    $file = Join-Path $webrootPath -ChildPath "\sitecore\shell\sitecore.version.xml"
-        
-    Write-Message "Disabling sitecore.version.xml file." "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
-    if (Test-Path $file)
-    {
-        $fileName = Split-Path $file -leaf
-        $newName = $fileName + ".disabled"
-        Rename-Item -Path $file -NewName $newName
-        Write-Message "Disabled: $file" "White" -WriteToLogOnly $TRUE -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
-    }
-    else
-    {
-        Write-Message "File not found on server: $file" "Yellow" -WriteToLogOnly $TRUE -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
-    }
-}
-
 function Disable-SitecoreAnalytics
 {
     param
@@ -2803,11 +2914,35 @@ function Set-ConfigurationFiles
         Write-Message "Changing private session state provider to MSSQL" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     }
 
+    # Add Telerik Encryption
+    if (($script:configSettings.Webserver.CMServerSettings.Enabled) -and ($script:configSettings.Webserver.CMServerSettings.AddTelerikEncryptionKey))
+    {
+        $key = $webconfig.CreateElement("add")
+        $key.SetAttribute("key", "Telerik.AsyncUpload.ConfigurationEncryptionKey")
+        $key.SetAttribute("value", $script:configSettings.Webserver.CMServerSettings.TelerikEncryptionKey)
+        $webconfig.configuration.SelectSingleNode("appSettings").AppendChild($key) | Out-Null
+        Write-Message "Set Telerik Configuration Encryption Key on CM Server" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+    }
+
     # Disable Sitecore's Upload Watcher
-    if ($script:configSettings.WebServer.CDServerSettings.DisableUploadWatcher)
+    if (($script:configSettings.Webserver.CDServerSettings.Enabled) -and ($script:configSettings.WebServer.CDServerSettings.DisableUploadWatcher))
     {
         $node = $webconfig.configuration.SelectSingleNode("system.webServer/modules/add[@name='SitecoreUploadWatcher']")
         $node.ParentNode.InnerXml = $node.ParentNode.InnerXml.Replace($node.OuterXml, $node.OuterXml.Insert(0, "<!--").Insert($node.OuterXml.Length+4, "-->"))
+    }
+
+    # Disable Telerik Controls
+    if (($script:configSettings.Webserver.CDServerSettings.Enabled) -and ($script:configSettings.WebServer.CDServerSettings.DisableTelerikControls))
+    {
+        $node = $webconfig.configuration.SelectSingleNode("system.webServer/handlers/add[@name='Telerik_Web_UI_DialogHandler_aspx']")
+        $webconfig.configuration.SelectSingleNode("system.webServer/handlers").RemoveChild($node) | Out-Null
+        
+        $node = $webconfig.configuration.SelectSingleNode("system.webServer/handlers/add[@name='Telerik_Web_UI_SpellCheckHandler_axd']")
+        $webconfig.configuration.SelectSingleNode("system.webServer/handlers").RemoveChild($node) | Out-Null
+        
+        $node = $webconfig.configuration.SelectSingleNode("system.webServer/handlers/add[@name='Telerik_Web_UI_WebResource_axd']")
+        $webconfig.configuration.SelectSingleNode("system.webServer/handlers").RemoveChild($node) | Out-Null
+        Write-Message "Disabled Telerik Handlers for CD Server" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     }
     
     # Modify license file path
@@ -3184,11 +3319,6 @@ function Set-ConfigurationFiles
     if ($script:configSettings.WebServer.CDServerSettings.Enabled -and $script:configSettings.WebServer.CDServerSettings.DisableExperienceAnalyticsAssemblies)
     {
         Disable-ExperienceAnalyticsAssemblies
-    }
-
-    if ($script:configSettings.WebServer.CDServerSettings.Enabled -and $script:configSettings.WebServer.CDServerSettings.DisableSitecoreVersionPage)
-    {
-        Disable-SitecoreVersionPage
     }
 
     if ($script:configSettings.WebServer.CDServerSettings.Enabled -and $script:configSettings.WebServer.CDServerSettings.RemovePhantomJs)
