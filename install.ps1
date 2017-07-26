@@ -515,6 +515,14 @@ function New-ConfigSettings([xml]$config)
     {
         $adminPassword = $adminPassword.Trim()
     }
+    $cmServerSettings | Add-Member -MemberType NoteProperty -Name AddTelerikEncryptionKey -Value $FALSE
+    $telerikEncryptionKey = $config.InstallSettings.WebServer.CMServerSettings.TelerikEncryptionKey
+    if (!([string]::IsNullOrEmpty($telerikEncryptionKey)))
+    {
+        $telerikEncryptionKey = $telerikEncryptionKey.Trim()
+        $cmServerSettings.AddTelerikEncryptionKey = $TRUE
+    }
+    $cmServerSettings | Add-Member -MemberType NoteProperty -Name TelerikEncryptionKey -Value $telerikEncryptionKey
     $cmServerSettings | Add-Member -MemberType NoteProperty -Name Enabled -Value (Get-ConfigOption $config "WebServer/CMServerSettings/enabled" $TRUE)
     $cmServerSettings | Add-Member -MemberType NoteProperty -Name DefaultSitecoreAdminPassword -Value $adminPassword
     $cmServerSettings | Add-Member -MemberType NoteProperty -Name Publishing -Value $publishing
@@ -531,8 +539,8 @@ function New-ConfigSettings([xml]$config)
     $cdServerSettings | Add-Member -MemberType NoteProperty -Name DenyExecutePermission -Value (Get-ConfigOption $config "WebServer/CDServerSettings/DenyExecutePermission")
     $cdServerSettings | Add-Member -MemberType NoteProperty -Name DisableUploadWatcher -Value (Get-ConfigOption $config "WebServer/CDServerSettings/DisableUploadWatcher")
     $cdServerSettings | Add-Member -MemberType NoteProperty -Name DisableExperienceAnalyticsAssemblies -Value (Get-ConfigOption $config "WebServer/CDServerSettings/DisableExperienceAnalyticsAssemblies")
-    $cdServerSettings | Add-Member -MemberType NoteProperty -Name DisableSitecoreVersionPage -Value (Get-ConfigOption $config "WebServer/CDServerSettings/DisableSitecoreVersionPage")
     $cdServerSettings | Add-Member -MemberType NoteProperty -Name RemovePhantomJs -Value (Get-ConfigOption $config "WebServer/CDServerSettings/RemovePhantomJs")
+    $cdServerSettings | Add-Member -MemberType NoteProperty -Name DisableTelerikControls -Value (Get-ConfigOption $config "WebServer/CDServerSettings/DisableTelerikControls")
     #endregion
 
     #region MediaRequestProtection
@@ -2630,25 +2638,6 @@ function Disable-ExperienceAnalyticsAssemblies
     }
 }
 
-function Disable-SitecoreVersionPage
-{
-    $webrootPath = Join-Path $script:configSettings.WebServer.SitecoreInstallPath -ChildPath "Website"
-    $file = Join-Path $webrootPath -ChildPath "\sitecore\shell\sitecore.version.xml"
-        
-    Write-Message "Disabling sitecore.version.xml file." "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
-    if (Test-Path $file)
-    {
-        $fileName = Split-Path $file -leaf
-        $newName = $fileName + ".disabled"
-        Rename-Item -Path $file -NewName $newName
-        Write-Message "Disabled: $file" "White" -WriteToLogOnly $TRUE -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
-    }
-    else
-    {
-        Write-Message "File not found on server: $file" "Yellow" -WriteToLogOnly $TRUE -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
-    }
-}
-
 function Disable-SitecoreAnalytics
 {
     param
@@ -2925,11 +2914,35 @@ function Set-ConfigurationFiles
         Write-Message "Changing private session state provider to MSSQL" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     }
 
+    # Add Telerik Encryption
+    if (($script:configSettings.Webserver.CMServerSettings.Enabled) -and ($script:configSettings.Webserver.CMServerSettings.AddTelerikEncryptionKey))
+    {
+        $key = $webconfig.CreateElement("add")
+        $key.SetAttribute("key", "Telerik.AsyncUpload.ConfigurationEncryptionKey")
+        $key.SetAttribute("value", $script:configSettings.Webserver.CMServerSettings.TelerikEncryptionKey)
+        $webconfig.configuration.SelectSingleNode("appSettings").AppendChild($key) | Out-Null
+        Write-Message "Set Telerik Configuration Encryption Key on CM Server" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+    }
+
     # Disable Sitecore's Upload Watcher
-    if ($script:configSettings.WebServer.CDServerSettings.DisableUploadWatcher)
+    if (($script:configSettings.Webserver.CDServerSettings.Enabled) -and ($script:configSettings.WebServer.CDServerSettings.DisableUploadWatcher))
     {
         $node = $webconfig.configuration.SelectSingleNode("system.webServer/modules/add[@name='SitecoreUploadWatcher']")
         $node.ParentNode.InnerXml = $node.ParentNode.InnerXml.Replace($node.OuterXml, $node.OuterXml.Insert(0, "<!--").Insert($node.OuterXml.Length+4, "-->"))
+    }
+
+    # Disable Telerik Controls
+    if (($script:configSettings.Webserver.CDServerSettings.Enabled) -and ($script:configSettings.WebServer.CDServerSettings.DisableTelerikControls))
+    {
+        $node = $webconfig.configuration.SelectSingleNode("system.webServer/handlers/add[@name='Telerik_Web_UI_DialogHandler_aspx']")
+        $webconfig.configuration.SelectSingleNode("system.webServer/handlers").RemoveChild($node) | Out-Null
+        
+        $node = $webconfig.configuration.SelectSingleNode("system.webServer/handlers/add[@name='Telerik_Web_UI_SpellCheckHandler_axd']")
+        $webconfig.configuration.SelectSingleNode("system.webServer/handlers").RemoveChild($node) | Out-Null
+        
+        $node = $webconfig.configuration.SelectSingleNode("system.webServer/handlers/add[@name='Telerik_Web_UI_WebResource_axd']")
+        $webconfig.configuration.SelectSingleNode("system.webServer/handlers").RemoveChild($node) | Out-Null
+        Write-Message "Disabled Telerik Handlers for CD Server" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     }
     
     # Modify license file path
@@ -3306,11 +3319,6 @@ function Set-ConfigurationFiles
     if ($script:configSettings.WebServer.CDServerSettings.Enabled -and $script:configSettings.WebServer.CDServerSettings.DisableExperienceAnalyticsAssemblies)
     {
         Disable-ExperienceAnalyticsAssemblies
-    }
-
-    if ($script:configSettings.WebServer.CDServerSettings.Enabled -and $script:configSettings.WebServer.CDServerSettings.DisableSitecoreVersionPage)
-    {
-        Disable-SitecoreVersionPage
     }
 
     if ($script:configSettings.WebServer.CDServerSettings.Enabled -and $script:configSettings.WebServer.CDServerSettings.RemovePhantomJs)
