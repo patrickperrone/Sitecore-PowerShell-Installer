@@ -977,7 +977,7 @@ function Test-PreRequisites
             Set-Location -Path $scriptDir
         }
 
-        if($script:configSettings.Database.Type = "Azure")
+        if($script:configSettings.Database.Type -eq "Azure")
         {
             $moduleName = "AzureRM.sql"
             if (!(Test-Module $moduleName))
@@ -1758,7 +1758,7 @@ function Copy-DatabaseFiles([string]$zipPath)
     $item = Find-FolderInZipFile $shell.NameSpace($zipPath).Items() "Databases"
     $dacItem = Find-FolderInZipFile $shell.NameSpace($zipPath).Items() "DACPAC"
 
-    if ($script:configSettings.Database.Type = "Azure")
+    if ($script:configSettings.Database.Type -eq "Azure")
     {
         $destinationFolderPath = Join-Path `
             -Path $dataFilesFolderPath `
@@ -1975,7 +1975,7 @@ function Attach-SitecoreDatabase([string]$databaseName, [Microsoft.SqlServer.Man
         return $fullDatabaseName
     }
     
-    if ($type = "Azure")
+    if ($type -eq "Azure")
     {
         $dataFilesFolderPath = Get-DatabaseInstallFolderPath -FileType DataFiles -LocalPath
         $mydacpac = Join-Path $dataFilesFolderPath -ChildPath "DACPAC/Sitecore.$databaseName.dacpac"
