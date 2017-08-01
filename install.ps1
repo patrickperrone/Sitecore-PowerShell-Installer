@@ -292,10 +292,10 @@ function Get-BaseConnectionString
 
 function Get-SubstituteDatabaseFileName($currentFileName, $dbName)
 {
-    # Function assumes name format will be Sitecore.{$dbname}.{ldf|mdf}
-    $prefix = $currentFileName.Substring(0,8)
-    $suffix = $currentFileName.Substring($currentFileName.Length-3)
-    return ("{0}.{1}.{2}" -f $prefix,$dbName,$suffix)
+    $extension = [System.IO.Path]::GetExtension($currentFileName)
+    $fileName = [System.IO.Path]::GetFileNameWithoutExtension($currentFileName)
+    $prefix = [System.IO.Path]::GetFileNameWithoutExtension($fileName)
+    return "$prefix.$dbName$extension"
 }
 
 function Set-AclForFolder([string]$userName, [string]$permission, [string]$folderPath)
@@ -1758,15 +1758,23 @@ function Copy-DatabaseFiles([string]$zipPath)
 
     if ($script:configSettings.Database.Type = "Azure")
     {
+        $destinationFolderPath = Join-Path `
+            -Path $dataFilesFolderPath `
+            -ChildPath "DACPAC"
+
+        mkdir $destinationFolderPath -ErrorAction SilentlyContinue | Out-Null
+
         foreach($childItem in $shell.NameSpace($dacItem.Path).Items())
         {
+            $childItemName = Split-Path -Path $childItem.Path -Leaf
+
+            $fileName = $childItemName
             if ($childItemName -eq "Sitecore.Analytics.dacpac")
             {
-                $fileName = "Sitecore.Reporting.dacpac"
+                $fileName =
+                    Get-SubstituteDatabaseFileName $childItemName "Reporting"
             }
 
-            $destinationFolderPath = $dataFilesFolderPath
-            $destinationFolderPath = Join-Path $dataFilesFolderPath -ChildPath "DACPAC"
             $filePath = Join-Path $destinationFolderPath -ChildPath $fileName
 
             if (Test-Path $filePath)
@@ -1775,6 +1783,12 @@ function Copy-DatabaseFiles([string]$zipPath)
             }
             else
             {
+                Write-Message `
+                    "Extracting $childItemName to $filePath" `
+                    "Gray" `
+                    -WriteToLog $true `
+                    -HostConsoleAvailable $hostScreenAvailable
+
                 $shell.NameSpace($destinationFolderPath).CopyHere($childItem)
 
                 if ($childItemName.ToLower() -like "sitecore.web.*")
@@ -1782,15 +1796,32 @@ function Copy-DatabaseFiles([string]$zipPath)
                     # Make copies of the web Database as required
                     foreach ($copy in $script:configSettings.Database.WebDatabaseCopies)
                     {
-                        $copyFilePath = Join-Path $destinationFolderPath -ChildPath (Get-SubstituteDatabaseFileName $childItemName $copy.Name)
+                        $copyName = Get-SubstituteDatabaseFileName `
+                            $childItemName `
+                            $copy.Name
+
+                        $copyFilePath = Join-Path `
+                            -Path $destinationFolderPath `
+                            -ChildPath $copyName
+
+                        Write-Message `
+                            "Creating $copyName from $filePath" `
+                            "Gray" `
+                            -WriteToLog $true `
+                            -HostConsoleAvailable $hostScreenAvailable
+
                         Copy-Item $filePath $copyFilePath
                     }
                 }
 
                 # Rename Analytics database files to Reporting
-                if ($childItemName.ToLower() -like "sitecore.analytics.*")
+                if ($childItemName -eq "Sitecore.Analytics.dacpac")
                 {
-                    Rename-Item "$destinationFolderPath\$($childItemName)" (Get-SubstituteDatabaseFileName $childItemName "Reporting")
+                    $sourcePath = Join-Path `
+                        -Path $destinationFolderPath `
+                        -ChildPath $childItemName
+
+                    Rename-Item $sourcePath $fileName
                 }
             }
         }
@@ -1947,6 +1978,13 @@ function Attach-SitecoreDatabase([string]$databaseName, [Microsoft.SqlServer.Man
         $dataFilesFolderPath = Get-DatabaseInstallFolderPath -FileType DataFiles -LocalPath
         $mydacpac = Join-Path $dataFilesFolderPath -ChildPath "DACPAC/Sitecore.$databaseName.dacpac"
         # New-AzureRmSqlDatabase -ResourceGroupName $dbResourceGroup -ServerName $dbserver -DatabaseName $fullDatabaseName -MaxSizeBytes $dbSize -Edition $dbEdition -RequestedServiceObjectiveName $dbServiceObjective
+
+        Write-Message `
+            "Publishing $mydacpac to $dbServer" `
+            "White" `
+            -WriteToLog $true `
+            -HostConsoleAvailable $hostScreenAvailable
+
         & $sqlpackage /Action:Publish /tsn:tcp:$dbServer /tdn:$fullDatabaseName /sf:$mydacpac /tu:$dbuser /tp:$dbpass /p:AllowIncompatiblePlatform=true
     }
     else
@@ -2108,11 +2146,11 @@ function Initialize-SitecoreDatabases
         $fullDatabaseName = Attach-SitecoreDatabase $dbname $sqlServerSmo
         if ($script:configSettings.Database.Type -ne "Azure")
         {
-        Set-DatabaseRoles $fullDatabaseName $sqlServerSmo
-        Grant-DatabasePermissions $fullDatabaseName $sqlServerSmo
+            Set-DatabaseRoles $fullDatabaseName $sqlServerSmo
+            Grant-DatabasePermissions $fullDatabaseName $sqlServerSmo
         }
     }
-    
+
     if (Test-ShouldSetAutogrowth)
     {
         foreach ($webDbName in $webDatabaseNames)
