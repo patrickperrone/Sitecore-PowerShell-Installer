@@ -703,6 +703,11 @@ function New-ConfigSettings([xml]$config)
     if (!([string]::IsNullOrEmpty($reportingApiKey)))
     {
         $reportingApiKey = $reportingApiKey.Trim()
+    }    
+    $passwordHashAlgorithm = $config.InstallSettings.WebServer.PasswordHashAlgorithm
+    if (!([string]::IsNullOrEmpty($passwordHashAlgorithm)))
+    {
+        $passwordHashAlgorithm = $passwordHashAlgorithm.Trim()
     }
     $lastChildFolderOfIncludeDirectory = $config.InstallSettings.WebServer.LastChildFolderOfIncludeDirectory
     if (!([string]::IsNullOrEmpty($lastChildFolderOfIncludeDirectory)))
@@ -734,7 +739,8 @@ function New-ConfigSettings([xml]$config)
     $webserver | Add-Member -MemberType NoteProperty -Name SitecoreInstallRoot -Value $sitecoreInstallRoot
     $webserver | Add-Member -MemberType NoteProperty -Name SitecoreInstallFolder -Value $sitecoreInstallFolder
     $webserver | Add-Member -MemberType NoteProperty -Name SitecoreInstanceName -Value $sitecoreInstanceName
-    $webserver | Add-Member -MemberType NoteProperty -Name ReportingApiKey -Value $reportingApiKey
+    $webserver | Add-Member -MemberType NoteProperty -Name ReportingApiKey -Value $reportingApiKey    
+    $webserver | Add-Member -MemberType NoteProperty -Name PasswordHashAlgorithm -Value $passwordHashAlgorithm
     $webserver | Add-Member -MemberType NoteProperty -Name LastChildFolderOfIncludeDirectory -Value $lastChildFolderOfIncludeDirectory
     $webserver | Add-Member -MemberType NoteProperty -Name EncryptConnectionStrings -Value (Get-ConfigOption $config "WebServer/EncryptConnectionStrings")
     $webserver | Add-Member -MemberType NoteProperty -Name IISWebSiteName -Value $iisWebSiteName
@@ -2954,6 +2960,13 @@ function Set-ConfigurationFiles
         Write-Message "Changing private session state provider to MSSQL" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     }
 
+    # Set HashAlgorithmType on Membership Provider
+    if (!([string]::IsNullOrEmpty($script:configSettings.WebServer.PasswordHashAlgorithm)))
+    {
+        $webconfig.configuration.'system.web'.SelectSingleNode("membership").SetAttribute("hashAlgorithmType", $script:configSettings.WebServer.PasswordHashAlgorithm) | Out-Null
+        Write-Message "Changing Membership Provider hashAlgorithmType to $($script:configSettings.WebServer.PasswordHashAlgorithm)" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+    }
+
     # Add Telerik Encryption
     if (($script:configSettings.Webserver.CMServerSettings.Enabled) -and ($script:configSettings.Webserver.CMServerSettings.AddTelerikEncryptionKey))
     {
@@ -3672,15 +3685,22 @@ function Start-Browser([string]$url)
 function Set-DefaultAdminPassword()
 {
     $password = $script:configSettings.WebServer.CMServerSettings.DefaultSitecoreAdminPassword
+    $passwordHash = $script:configSettings.WebServer.PasswordHashAlgorithm
 
     if (!$script:configSettings.WebServer.CMServerSettings.Enabled)
     {
         return
     }
     
-    if (!$password)
+    if (!($password) -and ([string]::IsNullOrEmpty($passwordHash)))
     {
         return
+    }
+    
+    if (!([string]::IsNullOrEmpty($passwordHash)) -and ([string]::IsNullOrEmpty($password)))
+    {
+        $password = "b"
+        Write-Message "Password Hash Algorithm has been strengthened, but no admin password provided. Admin password will be set to default." "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     }
     
     Write-Message "Attempting to change default Sitecore admin's password..." "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
@@ -3700,7 +3720,8 @@ function Set-DefaultAdminPassword()
     $html += "    {`r`n"
     $html += "      System.Web.Security.MembershipUser user = GetDefaultSitecoreAdmin(); `r`n"
     $html += "      Sitecore.Diagnostics.Assert.IsNotNull((object) user, typeof (Sitecore.Security.Accounts.User)); `r`n"
-    $html += "      user.ChangePassword(`"b`", newPwd);`r`n"
+    $html += "      string resetPassword = user.ResetPassword();`r`n"
+    $html += "      user.ChangePassword(resetPassword, newPwd);`r`n"
     $html += "      lblSummary.Text = `"New password set to `" + newPwd + `" for UserName `" + user.UserName;  `r`n"
     $html += "      hfPasswordChanged.Value = `"true`";`r`n"
     $html += "    }`r`n"
