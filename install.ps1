@@ -1,5 +1,7 @@
-# Specify a path to the .config file if you do not wish to put the .config file in the same directory as the script
-$configPath = ""
+# Specify a path to the .config file if you do not wish to put the .config file
+# in the same directory as the script
+param([string]$ConfigPath = "")
+
 $scriptDir = Split-Path (Resolve-Path $myInvocation.MyCommand.Path)
 $configSettings = $null
 # Assume there is no host console available until we can read the config file.
@@ -292,10 +294,10 @@ function Get-BaseConnectionString
 
 function Get-SubstituteDatabaseFileName($currentFileName, $dbName)
 {
-    # Function assumes name format will be Sitecore.{$dbname}.{ldf|mdf}
-    $prefix = $currentFileName.Substring(0,8)
-    $suffix = $currentFileName.Substring($currentFileName.Length-3)
-    return ("{0}.{1}.{2}" -f $prefix,$dbName,$suffix)
+    $extension = [System.IO.Path]::GetExtension($currentFileName)
+    $fileName = [System.IO.Path]::GetFileNameWithoutExtension($currentFileName)
+    $prefix = [System.IO.Path]::GetFileNameWithoutExtension($fileName)
+    return "$prefix.$dbName$extension"
 }
 
 function Set-AclForFolder([string]$userName, [string]$permission, [string]$folderPath)
@@ -515,6 +517,14 @@ function New-ConfigSettings([xml]$config)
     {
         $adminPassword = $adminPassword.Trim()
     }
+    $cmServerSettings | Add-Member -MemberType NoteProperty -Name AddTelerikEncryptionKey -Value $FALSE
+    $telerikEncryptionKey = $config.InstallSettings.WebServer.CMServerSettings.TelerikEncryptionKey
+    if (!([string]::IsNullOrEmpty($telerikEncryptionKey)))
+    {
+        $telerikEncryptionKey = $telerikEncryptionKey.Trim()
+        $cmServerSettings.AddTelerikEncryptionKey = $TRUE
+    }
+    $cmServerSettings | Add-Member -MemberType NoteProperty -Name TelerikEncryptionKey -Value $telerikEncryptionKey
     $cmServerSettings | Add-Member -MemberType NoteProperty -Name Enabled -Value (Get-ConfigOption $config "WebServer/CMServerSettings/enabled" $TRUE)
     $cmServerSettings | Add-Member -MemberType NoteProperty -Name DefaultSitecoreAdminPassword -Value $adminPassword
     $cmServerSettings | Add-Member -MemberType NoteProperty -Name Publishing -Value $publishing
@@ -531,8 +541,8 @@ function New-ConfigSettings([xml]$config)
     $cdServerSettings | Add-Member -MemberType NoteProperty -Name DenyExecutePermission -Value (Get-ConfigOption $config "WebServer/CDServerSettings/DenyExecutePermission")
     $cdServerSettings | Add-Member -MemberType NoteProperty -Name DisableUploadWatcher -Value (Get-ConfigOption $config "WebServer/CDServerSettings/DisableUploadWatcher")
     $cdServerSettings | Add-Member -MemberType NoteProperty -Name DisableExperienceAnalyticsAssemblies -Value (Get-ConfigOption $config "WebServer/CDServerSettings/DisableExperienceAnalyticsAssemblies")
-    $cdServerSettings | Add-Member -MemberType NoteProperty -Name DisableSitecoreVersionPage -Value (Get-ConfigOption $config "WebServer/CDServerSettings/DisableSitecoreVersionPage")
     $cdServerSettings | Add-Member -MemberType NoteProperty -Name RemovePhantomJs -Value (Get-ConfigOption $config "WebServer/CDServerSettings/RemovePhantomJs")
+    $cdServerSettings | Add-Member -MemberType NoteProperty -Name DisableTelerikControls -Value (Get-ConfigOption $config "WebServer/CDServerSettings/DisableTelerikControls")
     #endregion
 
     #region MediaRequestProtection
@@ -693,6 +703,11 @@ function New-ConfigSettings([xml]$config)
     if (!([string]::IsNullOrEmpty($reportingApiKey)))
     {
         $reportingApiKey = $reportingApiKey.Trim()
+    }    
+    $passwordHashAlgorithm = $config.InstallSettings.WebServer.PasswordHashAlgorithm
+    if (!([string]::IsNullOrEmpty($passwordHashAlgorithm)))
+    {
+        $passwordHashAlgorithm = $passwordHashAlgorithm.Trim()
     }
     $lastChildFolderOfIncludeDirectory = $config.InstallSettings.WebServer.LastChildFolderOfIncludeDirectory
     if (!([string]::IsNullOrEmpty($lastChildFolderOfIncludeDirectory)))
@@ -724,7 +739,8 @@ function New-ConfigSettings([xml]$config)
     $webserver | Add-Member -MemberType NoteProperty -Name SitecoreInstallRoot -Value $sitecoreInstallRoot
     $webserver | Add-Member -MemberType NoteProperty -Name SitecoreInstallFolder -Value $sitecoreInstallFolder
     $webserver | Add-Member -MemberType NoteProperty -Name SitecoreInstanceName -Value $sitecoreInstanceName
-    $webserver | Add-Member -MemberType NoteProperty -Name ReportingApiKey -Value $reportingApiKey
+    $webserver | Add-Member -MemberType NoteProperty -Name ReportingApiKey -Value $reportingApiKey    
+    $webserver | Add-Member -MemberType NoteProperty -Name PasswordHashAlgorithm -Value $passwordHashAlgorithm
     $webserver | Add-Member -MemberType NoteProperty -Name LastChildFolderOfIncludeDirectory -Value $lastChildFolderOfIncludeDirectory
     $webserver | Add-Member -MemberType NoteProperty -Name EncryptConnectionStrings -Value (Get-ConfigOption $config "WebServer/EncryptConnectionStrings")
     $webserver | Add-Member -MemberType NoteProperty -Name IISWebSiteName -Value $iisWebSiteName
@@ -967,7 +983,7 @@ function Test-PreRequisites
             Set-Location -Path $scriptDir
         }
 
-        if($script:configSettings.Database.Type = "Azure")
+        if($script:configSettings.Database.Type -eq "Azure")
         {
             $moduleName = "AzureRM.sql"
             if (!(Test-Module $moduleName))
@@ -1748,17 +1764,25 @@ function Copy-DatabaseFiles([string]$zipPath)
     $item = Find-FolderInZipFile $shell.NameSpace($zipPath).Items() "Databases"
     $dacItem = Find-FolderInZipFile $shell.NameSpace($zipPath).Items() "DACPAC"
 
-    if ($script:configSettings.Database.Type = "Azure")
+    if ($script:configSettings.Database.Type -eq "Azure")
     {
+        $destinationFolderPath = Join-Path `
+            -Path $dataFilesFolderPath `
+            -ChildPath "DACPAC"
+
+        mkdir $destinationFolderPath -ErrorAction SilentlyContinue | Out-Null
+
         foreach($childItem in $shell.NameSpace($dacItem.Path).Items())
         {
+            $childItemName = Split-Path -Path $childItem.Path -Leaf
+
+            $fileName = $childItemName
             if ($childItemName -eq "Sitecore.Analytics.dacpac")
             {
-                $fileName = "Sitecore.Reporting.dacpac"
+                $fileName =
+                    Get-SubstituteDatabaseFileName $childItemName "Reporting"
             }
 
-            $destinationFolderPath = $dataFilesFolderPath
-            $destinationFolderPath = Join-Path $dataFilesFolderPath -ChildPath "DACPAC"
             $filePath = Join-Path $destinationFolderPath -ChildPath $fileName
 
             if (Test-Path $filePath)
@@ -1767,6 +1791,12 @@ function Copy-DatabaseFiles([string]$zipPath)
             }
             else
             {
+                Write-Message `
+                    "Extracting $childItemName to $filePath" `
+                    "Gray" `
+                    -WriteToLog $true `
+                    -HostConsoleAvailable $hostScreenAvailable
+
                 $shell.NameSpace($destinationFolderPath).CopyHere($childItem)
 
                 if ($childItemName.ToLower() -like "sitecore.web.*")
@@ -1774,15 +1804,32 @@ function Copy-DatabaseFiles([string]$zipPath)
                     # Make copies of the web Database as required
                     foreach ($copy in $script:configSettings.Database.WebDatabaseCopies)
                     {
-                        $copyFilePath = Join-Path $destinationFolderPath -ChildPath (Get-SubstituteDatabaseFileName $childItemName $copy.Name)
+                        $copyName = Get-SubstituteDatabaseFileName `
+                            $childItemName `
+                            $copy.Name
+
+                        $copyFilePath = Join-Path `
+                            -Path $destinationFolderPath `
+                            -ChildPath $copyName
+
+                        Write-Message `
+                            "Creating $copyName from $filePath" `
+                            "Gray" `
+                            -WriteToLog $true `
+                            -HostConsoleAvailable $hostScreenAvailable
+
                         Copy-Item $filePath $copyFilePath
                     }
                 }
 
                 # Rename Analytics database files to Reporting
-                if ($childItemName.ToLower() -like "sitecore.analytics.*")
+                if ($childItemName -eq "Sitecore.Analytics.dacpac")
                 {
-                    Rename-Item "$destinationFolderPath\$($childItemName)" (Get-SubstituteDatabaseFileName $childItemName "Reporting")
+                    $sourcePath = Join-Path `
+                        -Path $destinationFolderPath `
+                        -ChildPath $childItemName
+
+                    Rename-Item $sourcePath $fileName
                 }
             }
         }
@@ -1934,11 +1981,18 @@ function Attach-SitecoreDatabase([string]$databaseName, [Microsoft.SqlServer.Man
         return $fullDatabaseName
     }
     
-    if ($type = "Azure")
+    if ($type -eq "Azure")
     {
         $dataFilesFolderPath = Get-DatabaseInstallFolderPath -FileType DataFiles -LocalPath
         $mydacpac = Join-Path $dataFilesFolderPath -ChildPath "DACPAC/Sitecore.$databaseName.dacpac"
         # New-AzureRmSqlDatabase -ResourceGroupName $dbResourceGroup -ServerName $dbserver -DatabaseName $fullDatabaseName -MaxSizeBytes $dbSize -Edition $dbEdition -RequestedServiceObjectiveName $dbServiceObjective
+
+        Write-Message `
+            "Publishing $mydacpac to $dbServer" `
+            "White" `
+            -WriteToLog $true `
+            -HostConsoleAvailable $hostScreenAvailable
+
         & $sqlpackage /Action:Publish /tsn:tcp:$dbServer /tdn:$fullDatabaseName /sf:$mydacpac /tu:$dbuser /tp:$dbpass /p:AllowIncompatiblePlatform=true
     }
     else
@@ -2100,11 +2154,11 @@ function Initialize-SitecoreDatabases
         $fullDatabaseName = Attach-SitecoreDatabase $dbname $sqlServerSmo
         if ($script:configSettings.Database.Type -ne "Azure")
         {
-        Set-DatabaseRoles $fullDatabaseName $sqlServerSmo
-        Grant-DatabasePermissions $fullDatabaseName $sqlServerSmo
+            Set-DatabaseRoles $fullDatabaseName $sqlServerSmo
+            Grant-DatabasePermissions $fullDatabaseName $sqlServerSmo
         }
     }
-    
+
     if (Test-ShouldSetAutogrowth)
     {
         foreach ($webDbName in $webDatabaseNames)
@@ -2630,25 +2684,6 @@ function Disable-ExperienceAnalyticsAssemblies
     }
 }
 
-function Disable-SitecoreVersionPage
-{
-    $webrootPath = Join-Path $script:configSettings.WebServer.SitecoreInstallPath -ChildPath "Website"
-    $file = Join-Path $webrootPath -ChildPath "\sitecore\shell\sitecore.version.xml"
-        
-    Write-Message "Disabling sitecore.version.xml file." "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
-    if (Test-Path $file)
-    {
-        $fileName = Split-Path $file -leaf
-        $newName = $fileName + ".disabled"
-        Rename-Item -Path $file -NewName $newName
-        Write-Message "Disabled: $file" "White" -WriteToLogOnly $TRUE -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
-    }
-    else
-    {
-        Write-Message "File not found on server: $file" "Yellow" -WriteToLogOnly $TRUE -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
-    }
-}
-
 function Disable-SitecoreAnalytics
 {
     param
@@ -2925,11 +2960,42 @@ function Set-ConfigurationFiles
         Write-Message "Changing private session state provider to MSSQL" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     }
 
+    # Set HashAlgorithmType on Membership Provider
+    if (!([string]::IsNullOrEmpty($script:configSettings.WebServer.PasswordHashAlgorithm)))
+    {
+        $webconfig.configuration.'system.web'.SelectSingleNode("membership").SetAttribute("hashAlgorithmType", $script:configSettings.WebServer.PasswordHashAlgorithm) | Out-Null
+        Write-Message "Changing Membership Provider hashAlgorithmType to $($script:configSettings.WebServer.PasswordHashAlgorithm)" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+    }
+
+    # Add Telerik Encryption
+    if (($script:configSettings.Webserver.CMServerSettings.Enabled) -and ($script:configSettings.Webserver.CMServerSettings.AddTelerikEncryptionKey))
+    {
+        $key = $webconfig.CreateElement("add")
+        $key.SetAttribute("key", "Telerik.AsyncUpload.ConfigurationEncryptionKey")
+        $key.SetAttribute("value", $script:configSettings.Webserver.CMServerSettings.TelerikEncryptionKey)
+        $webconfig.configuration.SelectSingleNode("appSettings").AppendChild($key) | Out-Null
+        Write-Message "Set Telerik Configuration Encryption Key on CM Server" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
+    }
+
     # Disable Sitecore's Upload Watcher
-    if ($script:configSettings.WebServer.CDServerSettings.DisableUploadWatcher)
+    if (($script:configSettings.Webserver.CDServerSettings.Enabled) -and ($script:configSettings.WebServer.CDServerSettings.DisableUploadWatcher))
     {
         $node = $webconfig.configuration.SelectSingleNode("system.webServer/modules/add[@name='SitecoreUploadWatcher']")
         $node.ParentNode.InnerXml = $node.ParentNode.InnerXml.Replace($node.OuterXml, $node.OuterXml.Insert(0, "<!--").Insert($node.OuterXml.Length+4, "-->"))
+    }
+
+    # Disable Telerik Controls
+    if (($script:configSettings.Webserver.CDServerSettings.Enabled) -and ($script:configSettings.WebServer.CDServerSettings.DisableTelerikControls))
+    {
+        $node = $webconfig.configuration.SelectSingleNode("system.webServer/handlers/add[@name='Telerik_Web_UI_DialogHandler_aspx']")
+        $webconfig.configuration.SelectSingleNode("system.webServer/handlers").RemoveChild($node) | Out-Null
+        
+        $node = $webconfig.configuration.SelectSingleNode("system.webServer/handlers/add[@name='Telerik_Web_UI_SpellCheckHandler_axd']")
+        $webconfig.configuration.SelectSingleNode("system.webServer/handlers").RemoveChild($node) | Out-Null
+        
+        $node = $webconfig.configuration.SelectSingleNode("system.webServer/handlers/add[@name='Telerik_Web_UI_WebResource_axd']")
+        $webconfig.configuration.SelectSingleNode("system.webServer/handlers").RemoveChild($node) | Out-Null
+        Write-Message "Disabled Telerik Handlers for CD Server" "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     }
     
     # Modify license file path
@@ -3308,11 +3374,6 @@ function Set-ConfigurationFiles
         Disable-ExperienceAnalyticsAssemblies
     }
 
-    if ($script:configSettings.WebServer.CDServerSettings.Enabled -and $script:configSettings.WebServer.CDServerSettings.DisableSitecoreVersionPage)
-    {
-        Disable-SitecoreVersionPage
-    }
-
     if ($script:configSettings.WebServer.CDServerSettings.Enabled -and $script:configSettings.WebServer.CDServerSettings.RemovePhantomJs)
     {
         [System.Collections.Generic.List[string]]$backupFiles = Remove-PhantomJs $backupFiles
@@ -3624,15 +3685,22 @@ function Start-Browser([string]$url)
 function Set-DefaultAdminPassword()
 {
     $password = $script:configSettings.WebServer.CMServerSettings.DefaultSitecoreAdminPassword
+    $passwordHash = $script:configSettings.WebServer.PasswordHashAlgorithm
 
     if (!$script:configSettings.WebServer.CMServerSettings.Enabled)
     {
         return
     }
     
-    if (!$password)
+    if (!($password) -and ([string]::IsNullOrEmpty($passwordHash)))
     {
         return
+    }
+    
+    if (!([string]::IsNullOrEmpty($passwordHash)) -and ([string]::IsNullOrEmpty($password)))
+    {
+        $password = "b"
+        Write-Message "Password Hash Algorithm has been strengthened, but no admin password provided. Admin password will be set to default." "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
     }
     
     Write-Message "Attempting to change default Sitecore admin's password..." "White" -WriteToLog $TRUE -HostConsoleAvailable $hostScreenAvailable
@@ -3652,7 +3720,8 @@ function Set-DefaultAdminPassword()
     $html += "    {`r`n"
     $html += "      System.Web.Security.MembershipUser user = GetDefaultSitecoreAdmin(); `r`n"
     $html += "      Sitecore.Diagnostics.Assert.IsNotNull((object) user, typeof (Sitecore.Security.Accounts.User)); `r`n"
-    $html += "      user.ChangePassword(`"b`", newPwd);`r`n"
+    $html += "      string resetPassword = user.ResetPassword();`r`n"
+    $html += "      user.ChangePassword(resetPassword, newPwd);`r`n"
     $html += "      lblSummary.Text = `"New password set to `" + newPwd + `" for UserName `" + user.UserName;  `r`n"
     $html += "      hfPasswordChanged.Value = `"true`";`r`n"
     $html += "    }`r`n"
@@ -3843,4 +3912,4 @@ function Install-SitecoreApplication([string]$configPath, [bool]$SuppressOutputT
     }
 }
 
-Install-SitecoreApplication $configPath -SuppressOutputToScreen $FALSE
+Install-SitecoreApplication $ConfigPath -SuppressOutputToScreen $FALSE
