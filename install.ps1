@@ -1968,7 +1968,7 @@ function Attach-SitecoreDatabase([string]$databaseName, [Microsoft.SqlServer.Man
     $dbEdition = $script:configSettings.Azure.Edition #None, Premium, Basic, Standard, DataWarehouse, Stretch, Free, PremiumRS
     $dbSize = $script:configSettings.Azure.MaxSize 
     $dbServiceObjective = $script:configSettings.Azure.ServiceObjective 
-
+	$type = $script:configSettings.Database.Type
 
     $dbuser = $script:configSettings.Database.SqlLoginForInstall
     $dbpass = $script:configSettings.Database.SqlLoginForInstallPassword
