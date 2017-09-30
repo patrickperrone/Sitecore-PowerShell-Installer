@@ -1170,11 +1170,17 @@ function Test-ScriptPermissionForPath([string]$path)
 
 function Test-SqlInstallPaths
 {
-    $installPaths = New-Object 'System.Collections.Generic.List[string]'
-    $installPaths.Add((Get-DatabaseInstallFolderPath -FileType DataFiles))
-    $installPaths.Add((Get-DatabaseInstallFolderPath -FileType LogFiles))
+    $installPaths = New-Object 'System.Collections.Generic.List[PSObject]'
+    $installPath = New-Object -TypeName PSObject
+    $installPath | Add-Member -MemberType NoteProperty -Name Path -Value (Get-DatabaseInstallFolderPath -FileType DataFiles)
+    $installPath | Add-Member -MemberType NoteProperty -Name IsLocalPath -Value ([string]::IsNullOrEmpty($script:configSettings.Database.DatabaseInstallPath.DataFiles.Unc))
+    $installPaths.Add($installPath)
+    $installPath = New-Object -TypeName PSObject
+    $installPath | Add-Member -MemberType NoteProperty -Name Path -Value (Get-DatabaseInstallFolderPath -FileType LogFiles)
+    $installPath | Add-Member -MemberType NoteProperty -Name IsLocalPath -Value ([string]::IsNullOrEmpty($script:configSettings.Database.DatabaseInstallPath.LogFiles.Unc))
+    $installPaths.Add($installPath)
 
-    if ($installPaths[1].Length -eq 0)
+    if ($installPaths[1].Path.Length -eq 0)
     {
         $installPaths.RemoveAt(1)
     }
@@ -1182,13 +1188,13 @@ function Test-SqlInstallPaths
     $testResult = $TRUE
     foreach ($path in $installPaths)
     {
-        if (!(Test-SqlPermissionForPath $path))
+        if (!(Test-SqlPermissionForPath $path.Path))
         {
             $testResult = $FALSE
             break
         }
 
-        if (!(Test-ScriptPermissionForPath $path))
+        if (!$path.IsLocalPath -and !(Test-ScriptPermissionForPath $path.Path))
         {
             $testResult = $FALSE
             break
