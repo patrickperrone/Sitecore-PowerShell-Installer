@@ -1,6 +1,6 @@
 # Specify a path to the .config file if you do not wish to put the .config file
 # in the same directory as the script
-param([string]$ConfigPath = "")
+param([string]$ConfigPath = "C:\Users\pperrone\Desktop\install.sandbox.patrick.config")
 
 $scriptDir = Split-Path (Resolve-Path $myInvocation.MyCommand.Path)
 $configSettings = $null
@@ -331,7 +331,7 @@ function New-SitecoreConfigurationCsvFile($excelPath)
     # Creates a csv with 'dummy' header, we do this to guarantee that 
     # we can create the csv file without requiring the first row to be
     # populated.
-    Import-Excel $excelPath -WorkSheetname 1 -DataOnly -NoHeader `
+    Import-Excel $excelPath -DataOnly -NoHeader `
         | Where-Object { $_.'P1' -ne "GENERAL CONFIGURATION"  } `
         | Export-Csv -Path $script:configSettings.ConfigurationFilesCsvPath -NoTypeInformation
 
