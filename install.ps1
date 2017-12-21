@@ -3406,7 +3406,7 @@ function Set-ConfigurationFiles
     }
 
     #region Edit Sitecore.Media.RequestProtection.config
-    if($script:configSettings.WebServer.CDServerSettings.Enabled -or $script:configSettings.WebServer.CMServerSettings.Enabled)
+    if($script:configSettings.WebServer.CDServerSettings.Enabled -or ($script:configSettings.WebServer.CMServerSettings.Enabled -and (!($script:configSettings.WebServer.CMServerSettings.Processing.Enabled))))
     {
         [System.Collections.Generic.List[string]]$backupFiles = Set-MediaRequestProtection $backupFiles
     }
